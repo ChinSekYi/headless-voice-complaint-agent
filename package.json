@@ -1,0 +1,34 @@
+{
+  "name": "hospital-complaints-handler",
+  "version": "1.0.0",
+  "description": "Build a **simple, end-to-end demo** of a Voice AI system for handling hospital patient complaints.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChinSekYi/hospital-complaints-handler.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ChinSekYi/hospital-complaints-handler/issues"
+  },
+  "homepage": "https://github.com/ChinSekYi/hospital-complaints-handler#readme",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.0.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
