@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hospital Complaint Handler</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 700px;
+      width: 100%;
+      padding: 40px;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 120px;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 14px;
+      resize: vertical;
+      transition: border-color 0.2s;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .file-input-wrapper {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+    }
+
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    input[type="file"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 30px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .submit-btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .submit-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+
+    .clear-btn {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    .clear-btn:hover:not(:disabled) {
+      background: #e0e0e0;
+    }
+
+    .response-section {
+      margin-top: 40px;
+      padding-top: 30px;
+      border-top: 2px solid #f0f0f0;
+      display: none;
+    }
+
+    .response-section.show {
+      display: block;
+    }
+
+    .response-title {
+      color: #333;
+      font-weight: 600;
+      margin-bottom: 12px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .response-text {
+      background: #f9f9f9;
+      padding: 15px;
+      border-radius: 6px;
+      color: #333;
+      line-height: 1.6;
+      margin-bottom: 15px;
+      border-left: 4px solid #667eea;
+    }
+
+    .complaint-type {
+      display: inline-block;
+      background: #667eea;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .audio-player {
+      background: #f9f9f9;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+    }
+
+    audio {
+      width: 100%;
+      height: 40px;
+      border-radius: 4px;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      color: #667eea;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+
+    .loading.show {
+      display: block;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #e0e0e0;
+      border-top-color: #667eea;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 12px;
+      border-radius: 6px;
+      margin-top: 15px;
+      border-left: 4px solid #c33;
+      font-size: 14px;
+      display: none;
+    }
+
+    .error.show {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🏥 Hospital Complaint Handler</h1>
+    <p class="subtitle">Submit your complaint and receive an AI-powered response</p>
+
+    <form id="complaintForm">
+      <div class="form-group">
+        <label for="complaintText">Your Complaint (text)</label>
+        <textarea
+          id="complaintText"
+          placeholder="Describe your complaint about your appointment, billing, or other concerns..."
+          required
+        ></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="audioFile">Or upload audio (optional)</label>
+        <input type="file" id="audioFile" accept="audio/*">
+      </div>
+
+      <div class="button-group">
+        <button type="submit" class="submit-btn">Submit Complaint</button>
+        <button type="reset" class="clear-btn">Clear</button>
+      </div>
+    </form>
+
+    <div class="loading" id="loading">
+      <span class="spinner"></span>
+      Processing your complaint...
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <div class="response-section" id="responseSection">
+      <div class="response-title">AI Response</div>
+      
+      <div id="complaintTypeContainer">
+        <span class="complaint-type" id="complaintType"></span>
+      </div>
+
+      <div class="response-text" id="responseText"></div>
+
+      <div id="audioContainer" style="display: none;">
+        <div class="response-title">Audio Response</div>
+        <div class="audio-player">
+          <audio id="audioPlayer" controls></audio>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('complaintForm');
+    const complaintText = document.getElementById('complaintText');
+    const audioFile = document.getElementById('audioFile');
+    const loading = document.getElementById('loading');
+    const error = document.getElementById('error');
+    const responseSection = document.getElementById('responseSection');
+    const complaintTypeEl = document.getElementById('complaintType');
+    const responseText = document.getElementById('responseText');
+    const audioContainer = document.getElementById('audioContainer');
+    const audioPlayer = document.getElementById('audioPlayer');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.classList.remove('show');
+      error.textContent = '';
+
+      const text = complaintText.value.trim();
+
+      if (!text) {
+        error.textContent = 'Please enter a complaint.';
+        error.classList.add('show');
+        return;
+      }
+
+      loading.classList.add('show');
+      responseSection.classList.remove('show');
+
+      try {
+        const response = await fetch('/voice', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ text })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Display complaint type
+        if (data.complaintType) {
+          complaintTypeEl.textContent = data.complaintType;
+        }
+
+        // Display text response
+        responseText.textContent = data.textResponse || 'No response received.';
+
+        // Display audio if available
+        if (data.audioBase64) {
+          const audioBlob = base64ToBlob(data.audioBase64);
+          const audioUrl = URL.createObjectURL(audioBlob);
+          audioPlayer.src = audioUrl;
+          audioContainer.style.display = 'block';
+        } else {
+          audioContainer.style.display = 'none';
+        }
+
+        responseSection.classList.add('show');
+      } catch (err) {
+        error.textContent = `Error: ${err.message}`;
+        error.classList.add('show');
+        console.error('Request error:', err);
+      } finally {
+        loading.classList.remove('show');
+      }
+    });
+
+    // Helper function to convert base64 to blob
+    function base64ToBlob(base64, mimeType = 'audio/wav') {
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      return new Blob([byteArray], { type: mimeType });
+    }
+  </script>
+</body>
+</html>
