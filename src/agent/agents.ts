@@ -57,7 +57,7 @@ async function classifyWithLLM(text: string): Promise<{ type: ComplaintType; llm
   }
 }
 
-function keywordClassify(text: string): ComplaintType {
+function keywordClassify(text: string): ComplaintType { // Fallback path if LLM fails
   const t = text.toLowerCase();
   if (/\bappointment|schedule|reschedule|cancel|doctor|wait\b/.test(t)) return "APPOINTMENT";
   if (/\bbill|billing|charge|payment|invoice|insurance\b/.test(t)) return "BILLING";
