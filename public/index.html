@@ -46,16 +46,31 @@
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
       padding: 20px;
-      text-align: center;
       border-bottom: 2px solid rgba(0, 0, 0, 0.1);
     }
 
-    .chat-header h1 {
-      font-size: 20px;
-      margin-bottom: 5px;
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
     }
 
-    .chat-header p {
+    .brand-logo {
+      height: 32px;
+      width: auto;
+      background: white;
+      border-radius: 6px;
+      padding: 4px 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .brand-text p {
       font-size: 12px;
       opacity: 0.9;
     }
@@ -275,16 +290,27 @@
     .tracker-header {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
-      padding: 20px;
-      text-align: center;
+      padding: 16px 20px;
     }
 
-    .tracker-header h2 {
+    .tracker-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .tracker-brand .brand-logo {
+      height: 26px;
+      padding: 3px 5px;
+    }
+
+    .tracker-brand .brand-text h2 {
       font-size: 18px;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
 
-    .tracker-header p {
+    .tracker-brand .brand-text p {
       font-size: 12px;
       opacity: 0.9;
     }
@@ -412,8 +438,13 @@
     <!-- Field Tracker Sidebar -->
     <div class="field-tracker">
       <div class="tracker-header">
-        <h2>📊 Field Tracker</h2>
-        <p>Real-time data collection</p>
+        <div class="tracker-brand">
+          <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+          <div class="brand-text">
+            <h2>📊 Field Tracker</h2>
+            <p>Real-time data collection</p>
+          </div>
+        </div>
       </div>
       <div class="tracker-content" id="trackerContent">
         <div class="empty-tracker">
@@ -425,15 +456,17 @@
     <!-- Chat Interface -->
     <div class="chat-container">
     <div class="chat-header">
-      <h1>🏥 Hospital Complaint Handler</h1>
-      <p>Multi-turn conversational intake chatbot</p>
+      <div class="header-brand">
+        <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+        <div class="brand-text">
+          <h1>🏥 Hospital Complaint Handler</h1>
+          <p>Multi-turn conversational intake chatbot</p>
+        </div>
+      </div>
     </div>
 
     <div id="messages" class="messages">
-      <div class="empty-state">
-        <p>👋 Welcome! Start by describing your complaint.</p>
-        <p style="font-size: 12px;">I'll ask targeted follow-up questions as needed.</p>
-      </div>
+      <!-- Welcome message will be added automatically on load -->
     </div>
 
     <div class="input-area">
@@ -467,6 +500,13 @@
     // Auto-focus input
     messageInput.focus();
 
+    // Auto-load welcome message on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      const welcomeMessage = `Hello — I'm here to help with any concerns about your experience at Singapore General Hospital (SGH). I know this can be stressful, and I'll make this as easy as possible.\n\nTo help us act quickly, please share a short but detailed description in one message. It helps to include:\n\n• When it happened (date/time)\n• Service or department (e.g., Emergency, Specialist Clinic, Surgery, Dialysis, Laboratory, Pharmacy, Ward)\n• Who was involved (doctor, nurse, receptionist, etc.)\n• What happened (the specific issue)\n• How it affected you (e.g., stress, missed work, pain, extra cost)\n\nExample:\n"I had an appointment on 12 Jun at the Orthopaedic Specialist Clinic. My printed date showed 23 Jun instead. I spoke with the receptionist and was told to rebook. This caused me to miss half a day of work and reschedule my physiotherapy."\n\nShare whatever you remember, and we'll fill in the rest together.`;
+      
+      addMessage('assistant', welcomeMessage);
+    });
+
     // Handle Enter key
     messageInput.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !isLoading && messageInput.value.trim()) {
@@ -494,7 +534,7 @@
       isLoading = true;
       sendBtn.disabled = true;
       messageInput.disabled = true;
-      const loadingMsg = addMessage('assistant', '<div class="loading-dots"><span></span><span></span><span></span></div>');
+      const loadingMsg = addMessage('assistant', '<div class="loading-dots"><span></span><span></span><span></span></div>', true);
 
       try {
         const requestBody = { text };
@@ -600,12 +640,13 @@
       conversationComplete = false;
       currentComplaint = {};
       currentMissingFields = [];
-      messagesDiv.innerHTML = `
-        <div class="empty-state">
-          <p>👋 Welcome! Start by describing your complaint.</p>
-          <p style="font-size: 12px;">I'll ask targeted follow-up questions as needed.</p>
-        </div>
-      `;
+      
+      messagesDiv.innerHTML = '';
+      
+      const welcomeMessage = `Hello — I'm here to help with any concerns about your experience at Singapore General Hospital (SGH). I know this can be stressful, and I'll make this as easy as possible.\n\nTo help us act quickly, please share a short but detailed description in one message. It helps to include:\n\n• When it happened (date/time)\n• Service or department (e.g., Emergency, Specialist Clinic, Surgery, Dialysis, Laboratory, Pharmacy, Ward)\n• Who was involved (doctor, nurse, receptionist, etc.)\n• What happened (the specific issue)\n• How it affected you (e.g., stress, missed work, pain, extra cost)\n\nExample:\n"I had an appointment on 12 Jun at the Orthopaedic Specialist Clinic. My printed date showed 23 Jun instead. I spoke with the receptionist and was told to rebook. This caused me to miss half a day of work and reschedule my physiotherapy."\n\nShare whatever you remember, and we'll fill in the rest together.`;
+      
+      addMessage('assistant', welcomeMessage);
+      
       trackerContent.innerHTML = `
         <div class="empty-tracker">
           <p>🔍 Field information will appear here as the conversation progresses.</p>

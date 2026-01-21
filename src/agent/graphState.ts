@@ -49,6 +49,12 @@ export const GraphStateAnnotation = Annotation.Root({
     reducer: (prev, next) => next ?? prev,
     default: () => undefined,
   }),
+  
+    /** Track how many times we've asked about each field (to avoid frustrating repeats) */
+    fieldAttempts: Annotation<Record<string, number>>({
+      reducer: (prev, next) => ({ ...prev, ...next }),
+      default: () => ({}),
+    }),
 });
 
 export type GraphState = typeof GraphStateAnnotation.State;
