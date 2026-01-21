@@ -19,35 +19,58 @@
       align-items: center;
       justify-content: center;
       padding: 20px;
+      gap: 20px;
+    }
+
+    .main-layout {
+      display: flex;
+      gap: 20px;
+      width: 100%;
+      max-width: 1200px;
+      height: 90vh;
+      max-height: 800px;
     }
 
     .chat-container {
       background: white;
       border-radius: 12px;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-      width: 100%;
-      max-width: 600px;
-      height: 90vh;
-      max-height: 800px;
+      flex: 1;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      min-width: 400px;
     }
 
     .chat-header {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
       padding: 20px;
-      text-align: center;
       border-bottom: 2px solid rgba(0, 0, 0, 0.1);
     }
 
-    .chat-header h1 {
-      font-size: 20px;
-      margin-bottom: 5px;
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
     }
 
-    .chat-header p {
+    .brand-logo {
+      height: 32px;
+      width: auto;
+      background: white;
+      border-radius: 6px;
+      padding: 4px 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .brand-text p {
       font-size: 12px;
       opacity: 0.9;
     }
@@ -252,20 +275,198 @@
       color: #999;
       margin-top: 5px;
     }
+
+    /* Field Tracker Sidebar */
+    .field-tracker {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      width: 350px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tracker-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 16px 20px;
+    }
+
+    .tracker-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .tracker-brand .brand-logo {
+      height: 26px;
+      padding: 3px 5px;
+    }
+
+    .tracker-brand .brand-text h2 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    .tracker-brand .brand-text p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .tracker-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .tracker-section {
+      margin-bottom: 20px;
+    }
+
+    .tracker-section h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: #667eea;
+      color: white;
+    }
+
+    .field-item {
+      background: #f8f9fa;
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      border-left: 3px solid #e0e0e0;
+      transition: all 0.3s ease;
+    }
+
+    .field-item.collected {
+      background: #d4edda;
+      border-left-color: #28a745;
+      animation: slideIn 0.3s ease;
+    }
+
+    .field-item.missing {
+      background: #fff3cd;
+      border-left-color: #ffc107;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .field-label {
+      font-weight: 600;
+      color: #555;
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .field-value {
+      color: #333;
+      font-size: 13px;
+    }
+
+    .empty-tracker {
+      text-align: center;
+      color: #999;
+      padding: 40px 20px;
+      font-size: 14px;
+    }
+
+    .classification-box {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .classification-box .label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .classification-box .value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    @media (max-width: 900px) {
+      .main-layout {
+        flex-direction: column;
+        height: auto;
+      }
+
+      .field-tracker {
+        width: 100%;
+        max-height: 400px;
+      }
+
+      .chat-container {
+        min-width: auto;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="chat-container">
+  <div class="main-layout">
+    <!-- Field Tracker Sidebar -->
+    <div class="field-tracker">
+      <div class="tracker-header">
+        <div class="tracker-brand">
+          <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+          <div class="brand-text">
+            <h2>📊 Field Tracker</h2>
+            <p>Real-time data collection</p>
+          </div>
+        </div>
+      </div>
+      <div class="tracker-content" id="trackerContent">
+        <div class="empty-tracker">
+          <p>🔍 Field information will appear here as the conversation progresses.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Interface -->
+    <div class="chat-container">
     <div class="chat-header">
-      <h1>🏥 Hospital Complaint Handler</h1>
-      <p>Multi-turn conversational intake chatbot</p>
+      <div class="header-brand">
+        <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+        <div class="brand-text">
+          <h1>🏥 Hospital Complaint Handler</h1>
+          <p>Multi-turn conversational intake chatbot</p>
+        </div>
+      </div>
     </div>
 
     <div id="messages" class="messages">
-      <div class="empty-state">
-        <p>👋 Welcome! Start by describing your complaint.</p>
-        <p style="font-size: 12px;">I'll ask targeted follow-up questions as needed.</p>
-      </div>
+      <!-- Welcome message will be added automatically on load -->
     </div>
 
     <div class="input-area">
@@ -281,19 +482,30 @@
       <button id="resetBtn" class="reset-btn" onclick="resetChat()" style="display: none;">Reset</button>
     </div>
   </div>
+  </div>
 
   <script>
     const messagesDiv = document.getElementById('messages');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const resetBtn = document.getElementById('resetBtn');
+    const trackerContent = document.getElementById('trackerContent');
 
     let sessionId = null;
     let isLoading = false;
     let conversationComplete = false;
+    let currentComplaint = {};
+    let currentMissingFields = [];
 
     // Auto-focus input
     messageInput.focus();
+
+    // Auto-load welcome message on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      const welcomeMessage = `Hello — I'm here to help with any concerns about your experience at Singapore General Hospital (SGH). I know this can be stressful, and I'll make this as easy as possible.\n\nTo help us act quickly, please share a short but detailed description in one message. It helps to include:\n\n• When it happened (date/time)\n• Service or department (e.g., Emergency, Specialist Clinic, Surgery, Dialysis, Laboratory, Pharmacy, Ward)\n• Who was involved (doctor, nurse, receptionist, etc.)\n• What happened (the specific issue)\n• How it affected you (e.g., stress, missed work, pain, extra cost)\n\nExample:\n"I had an appointment on 12 Jun at the Orthopaedic Specialist Clinic. My printed date showed 23 Jun instead. I spoke with the receptionist and was told to rebook. This caused me to miss half a day of work and reschedule my physiotherapy."\n\nShare whatever you remember, and we'll fill in the rest together.`;
+      
+      addMessage('assistant', welcomeMessage);
+    });
 
     // Handle Enter key
     messageInput.addEventListener('keypress', (e) => {
@@ -322,7 +534,7 @@
       isLoading = true;
       sendBtn.disabled = true;
       messageInput.disabled = true;
-      const loadingMsg = addMessage('assistant', '<div class="loading-dots"><span></span><span></span><span></span></div>');
+      const loadingMsg = addMessage('assistant', '<div class="loading-dots"><span></span><span></span><span></span></div>', true);
 
       try {
         const requestBody = { text };
@@ -346,6 +558,17 @@
         if (data.sessionId) {
           sessionId = data.sessionId;
         }
+
+        // Update complaint state
+        if (data.complaint) {
+          currentComplaint = data.complaint;
+        }
+        if (data.missingFields) {
+          currentMissingFields = data.missingFields;
+        }
+
+        // Update field tracker
+        updateFieldTracker(currentComplaint, currentMissingFields);
 
         // Remove loading message
         loadingMsg.remove();
@@ -384,6 +607,8 @@
         if (!conversationComplete) {
           sendBtn.disabled = false;
           messageInput.disabled = false;
+          // Restore focus to input after re-enabling
+          messageInput.focus();
         }
       }
 
@@ -413,10 +638,18 @@
     function resetChat() {
       sessionId = null;
       conversationComplete = false;
-      messagesDiv.innerHTML = `
-        <div class="empty-state">
-          <p>👋 Welcome! Start by describing your complaint.</p>
-          <p style="font-size: 12px;">I'll ask targeted follow-up questions as needed.</p>
+      currentComplaint = {};
+      currentMissingFields = [];
+      
+      messagesDiv.innerHTML = '';
+      
+      const welcomeMessage = `Hello — I'm here to help with any concerns about your experience at Singapore General Hospital (SGH). I know this can be stressful, and I'll make this as easy as possible.\n\nTo help us act quickly, please share a short but detailed description in one message. It helps to include:\n\n• When it happened (date/time)\n• Service or department (e.g., Emergency, Specialist Clinic, Surgery, Dialysis, Laboratory, Pharmacy, Ward)\n• Who was involved (doctor, nurse, receptionist, etc.)\n• What happened (the specific issue)\n• How it affected you (e.g., stress, missed work, pain, extra cost)\n\nExample:\n"I had an appointment on 12 Jun at the Orthopaedic Specialist Clinic. My printed date showed 23 Jun instead. I spoke with the receptionist and was told to rebook. This caused me to miss half a day of work and reschedule my physiotherapy."\n\nShare whatever you remember, and we'll fill in the rest together.`;
+      
+      addMessage('assistant', welcomeMessage);
+      
+      trackerContent.innerHTML = `
+        <div class="empty-tracker">
+          <p>🔍 Field information will appear here as the conversation progresses.</p>
         </div>
       `;
       messageInput.value = '';
@@ -425,6 +658,114 @@
       sendBtn.disabled = false;
       resetBtn.style.display = 'none';
       messageInput.focus();
+    }
+
+    function updateFieldTracker(complaint, missingFields) {
+      if (!complaint || Object.keys(complaint).length === 0) {
+        return;
+      }
+
+      let html = '';
+
+      // Classification section
+      if (complaint.domain || complaint.subcategory) {
+        html += '<div class="classification-box">';
+        if (complaint.domain) {
+          html += `<div class="label">Domain</div>`;
+          html += `<div class="value">${formatFieldName(complaint.domain)}</div>`;
+        }
+        if (complaint.subcategory) {
+          html += `<div class="label" style="margin-top: 10px;">Subcategory</div>`;
+          html += `<div class="value">${formatFieldName(complaint.subcategory)}</div>`;
+        }
+        html += '</div>';
+      }
+
+      // Collected fields section
+      const collectedFields = [];
+      
+      if (complaint.description) {
+        collectedFields.push({ label: 'Description', value: complaint.description });
+      }
+      
+      if (complaint.typeOfCare) {
+        collectedFields.push({ label: 'Type of Care', value: formatFieldName(complaint.typeOfCare) });
+      }
+      
+      if (complaint.event) {
+        if (complaint.event.date) {
+          collectedFields.push({ label: 'Event Date', value: complaint.event.date });
+        }
+        if (complaint.event.location) {
+          collectedFields.push({ label: 'Event Location', value: complaint.event.location });
+        }
+      }
+      
+      if (complaint.billing) {
+        if (complaint.billing.amount) {
+          collectedFields.push({ label: 'Billing Amount', value: complaint.billing.amount });
+        }
+        if (complaint.billing.insuranceStatus) {
+          collectedFields.push({ label: 'Insurance Status', value: complaint.billing.insuranceStatus });
+        }
+      }
+      
+      if (complaint.medication && complaint.medication.name) {
+        collectedFields.push({ label: 'Medication Name', value: complaint.medication.name });
+      }
+      
+      if (complaint.people && complaint.people.role) {
+        collectedFields.push({ label: 'Staff Role', value: complaint.people.role });
+      }
+      
+      if (complaint.impact && Array.isArray(complaint.impact)) {
+        collectedFields.push({ 
+          label: 'Impact', 
+          value: complaint.impact.map(i => formatFieldName(i)).join(', ') 
+        });
+      }
+      
+      if (complaint.urgencyLevel) {
+        collectedFields.push({ label: 'Urgency Level', value: formatFieldName(complaint.urgencyLevel) });
+      }
+
+      if (collectedFields.length > 0) {
+        html += '<div class="tracker-section">';
+        html += `<h3>✓ Collected Fields <span class="section-badge">${collectedFields.length}</span></h3>`;
+        collectedFields.forEach(field => {
+          html += `<div class="field-item collected">`;
+          html += `<span class="field-label">${field.label}</span>`;
+          html += `<div class="field-value">${field.value}</div>`;
+          html += `</div>`;
+        });
+        html += '</div>';
+      }
+
+      // Missing fields section
+      if (missingFields && missingFields.length > 0) {
+        html += '<div class="tracker-section">';
+        html += `<h3>⏳ Pending Fields <span class="section-badge">${missingFields.length}</span></h3>`;
+        missingFields.forEach(field => {
+          html += `<div class="field-item missing">`;
+          html += `<span class="field-label">${formatFieldName(field)}</span>`;
+          html += `<div class="field-value">Awaiting response...</div>`;
+          html += `</div>`;
+        });
+        html += '</div>';
+      }
+
+      trackerContent.innerHTML = html;
+    }
+
+    function formatFieldName(str) {
+      if (!str) return '';
+      return str
+        .replace(/_/g, ' ')
+        .replace(/\./g, ' - ')
+        .toLowerCase()
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
     }
   </script>
 </body>

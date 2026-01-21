@@ -38,11 +38,23 @@ export const GraphStateAnnotation = Annotation.Root({
     default: () => false,
   }),
   
+  /** Whether agent needs more info to proceed with classification */
+  needsMoreInfo: Annotation<boolean>({
+    reducer: (prev, next) => next,
+    default: () => false,
+  }),
+  
   /** Session ID for tracking multi-turn conversations */
   sessionId: Annotation<string | undefined>({
     reducer: (prev, next) => next ?? prev,
     default: () => undefined,
   }),
+  
+    /** Track how many times we've asked about each field (to avoid frustrating repeats) */
+    fieldAttempts: Annotation<Record<string, number>>({
+      reducer: (prev, next) => ({ ...prev, ...next }),
+      default: () => ({}),
+    }),
 });
 
 export type GraphState = typeof GraphStateAnnotation.State;

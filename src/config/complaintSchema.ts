@@ -93,6 +93,16 @@ export interface Complaint {
   impact?: ImpactFlag[];
   urgencyLevel?: UrgencyLevel;
   
+  // Complainant contact details (from SGH feedback form)
+  contactDetails?: {
+    name?: string;
+    email?: string;
+    contactNo?: string;
+    address?: string;
+    isPatient?: boolean;
+    wantsContact?: boolean;
+  };
+  
   // Processing flags
   needsHumanInvestigation?: boolean;
 }
