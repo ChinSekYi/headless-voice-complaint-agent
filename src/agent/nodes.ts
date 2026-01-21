@@ -3,6 +3,9 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { GraphState } from "./graphState.js";
 import { ComplaintDomain, ComplaintSubcategory } from "../config/complaintSchema.js";
 import { HOSPITAL_CONFIG } from "../config/hospitalContext.js";
+import { FIELD_DEFINITIONS, setUnknownValue, getFieldDefinition } from "../config/fieldConfig.js";
+import { determineUserIntent, isAffirmative, isNegative, isClarificationRequest, isSkip } from "../config/userIntentPatterns.js";
+import { mapInputToCanonical, getOptionsList, TYPE_OF_CARE_MAPPINGS, IMPACT_MAPPINGS, INSURANCE_STATUS_MAPPINGS } from "../config/fieldValueMappings.js";
 // Removed unused imports: RequiredFieldsBySubcategory, SGH_TYPES_OF_CARE
 
 /**
@@ -19,25 +22,228 @@ interface ValidationResult {
   errorMessage?: string;
 }
 
-// Type-of-care options used across prompts for consistency
-const TYPE_OF_CARE_OPTIONS = [
-  "1. Emergency Department",
-  "2. Specialist Clinic (Cardiology, Orthopaedic, ENT, etc.)",
-  "3. Surgery or Day Surgery",
-  "4. Endoscopy",
-  "5. Dialysis (Haemodialysis or Peritoneal)",
-  "6. Laboratory/Blood Test",
-  "7. Radiology/Imaging (X-ray, MRI, CT scan)",
-  "8. Pharmacy",
-  "9. Inpatient Ward",
-  "10. Other (please specify)",
-];
-
+// Type-of-care options generated from config (dynamic, not hardcoded)
 function renderTypeOfCareOptionsText(): string {
-  return TYPE_OF_CARE_OPTIONS.join('\n');
+  return getOptionsList(TYPE_OF_CARE_MAPPINGS, true);
 }
 
-// Impact options for structured prompting
+/**
+ * Generate context-aware questions based on complaint category
+ */
+function getContextualQuestions(subcategory: string | undefined, complaint: any): string[] {
+  const questions: string[] = [];
+  
+  switch(subcategory) {
+    case 'FACILITIES':
+      // For facilities complaints (noise, cleanliness, comfort, navigation, equipment, etc.)
+      questions.push('Which area or part of the hospital? (e.g., ward, room, waiting area)');
+      questions.push('What specifically was the issue? (e.g., noise, cleanliness, temperature, comfort, equipment)');
+      questions.push('How did this affect your stay? (e.g., disrupted sleep, discomfort, health concern)');
+      break;
+      
+    case 'WAIT_TIME':
+      // For wait time complaints
+      questions.push('When did this happen? (date or "yesterday", "last week", etc.)');
+      questions.push('Which service were you waiting for?');
+      questions.push('How long did you wait?');
+      break;
+      
+    case 'BILLING':
+      // For billing complaints - vary questions based on issue type
+      const desc = (complaint.description || '').toLowerCase();
+      const adminErrorKeywords = ['name', 'address', 'wrong details', 'details wrong', 'incorrect name', 'incorrect address', 'wasn\'t checked', 'not checked', 'didn\'t check', 'didnt check', 'error', 'mistake', 'incorrect info', 'wrong info'];
+      const chargeKeywords = ['charged', 'charge', 'overcharged', 'amount', 'cost', 'expensive', 'too much', 'extra', 'double', 'unexpected charge', 'wrong amount'];
+      const isAdminError = adminErrorKeywords.some(keyword => desc.includes(keyword));
+      const isChargeIssue = chargeKeywords.some(keyword => desc.includes(keyword));
+      
+      if (isAdminError && !isChargeIssue) {
+        // Admin error (name, address, not checked) - don't ask about amount/insurance
+        questions.push('How did this error affect you?');
+      } else if (isChargeIssue) {
+        // Charge/amount issue - ask about amount and insurance
+        questions.push('What was the issue with the charge? (e.g., unexpected charge, wrong amount, unclear fees)');
+        questions.push('Approximate amount involved?');
+        questions.push('Do you have insurance that should have covered this?');
+      } else {
+        // Generic billing issue - start with understanding what type
+        questions.push('What was the issue with your bill?');
+        questions.push('How did this affect you?');
+      }
+      break;
+      
+    case 'APPOINTMENT':
+      // For appointment-related complaints
+      questions.push('What happened with your appointment? (e.g., cancelled, rescheduled, missed slot)');
+      questions.push('When was this scheduled for?');
+      questions.push('How did this affect you?');
+      break;
+      
+    case 'ADMIN_PROCESS':
+      // For administrative process complaints
+      questions.push('Which process or step had an issue? (e.g., registration, paperwork, scheduling)');
+      questions.push('When did this happen?');
+      questions.push('What went wrong or could be improved?');
+      break;
+      
+    case 'MEDICATION':
+      // For medication-related complaints
+      questions.push('Which medication was involved?');
+      questions.push('When did this happen?');
+      questions.push('What was the issue? (e.g., wrong medication, side effects, dosage unclear)');
+      break;
+      
+    case 'DIAGNOSIS':
+      // For diagnosis-related complaints
+      questions.push('When did this happen?');
+      questions.push('What was the concern about the diagnosis?');
+      questions.push('How has this affected you?');
+      break;
+      
+    case 'PROCEDURE':
+      // For procedure-related complaints
+      questions.push('Which procedure or treatment was involved?');
+      questions.push('When did this happen?');
+      questions.push('What was your concern?');
+      break;
+      
+    case 'SAFETY':
+      // For safety concerns - these are high priority
+      questions.push('When did this safety concern occur?');
+      questions.push('What exactly happened? (as much detail as you can provide)');
+      questions.push('Who was involved or witnessed this?');
+      break;
+      
+    case 'FOLLOW_UP':
+      // For follow-up care issues
+      questions.push('What follow-up care was supposed to happen?');
+      questions.push('When was it supposed to happen?');
+      questions.push('How has the lack of follow-up affected you?');
+      break;
+      
+    case 'COMMUNICATION':
+      // For communication/relationship complaints (avoid re-asking the core issue)
+      questions.push('Who did you interact with? (role, name if known)');
+      questions.push('When did this happen?');
+      questions.push('How often has this happened? (one time or multiple times?)');
+      break;
+      
+    case 'ATTITUDE':
+      // For attitude complaints (avoid re-asking the core issue)
+      questions.push('Who did you interact with? (role, name if known)');
+      questions.push('When did this happen?');
+      questions.push('In which department or area did this happen?');
+      break;
+      
+    case 'RESPECT':
+      // For respect/dignity complaints (avoid re-asking the core issue)
+      questions.push('Who was involved? (role, name if known)');
+      questions.push('When did this happen?');
+      questions.push('Were there any witnesses to this?');
+      break;
+      
+    case 'PROFESSIONALISM':
+      // For professionalism complaints (avoid re-asking the core issue)
+      questions.push('Who was involved? (role, name if known)');
+      questions.push('When did this happen?');
+      questions.push('Which department or area was this in?');
+      break;
+      
+    default:
+      // Generic fallback
+      questions.push('When did this happen?');
+      questions.push('Which department or service was involved?');
+      questions.push('How did this affect you?');
+  }
+  
+  return questions;
+}
+
+/**
+ * Get context-aware empathy prefix based on category
+ */
+function getContextualEmpathyPrefix(subcategory: string | undefined): string {
+  switch(subcategory) {
+    case 'SAFETY':
+      return "We take safety concerns very seriously.";
+    case 'FACILITIES':
+      return "Thank you for this feedback about our facilities.";
+    case 'BILLING':
+      return "I understand billing issues can be frustrating.";
+    case 'WAIT_TIME':
+      return "We apologize for the long wait time.";
+    default:
+      return "I'm sorry to hear about this.";
+  }
+}
+
+/**
+ * Irrelevant fields by category - these should never be asked for
+ * This ensures we don't ask questions that don't match the complaint type
+ */
+function getIrrelevantFields(subcategory: string | undefined): string[] {
+  switch(subcategory) {
+    case 'FACILITIES':
+      // Facilities complaints don't need department info, staff role, or medication
+      return ['typeOfCare', 'people.role', 'medication.name', 'billing.amount', 'billing.insuranceStatus'];
+    case 'WAIT_TIME':
+      // Wait time complaints don't need staff role, medication, or billing
+      return ['people.role', 'medication.name', 'billing.amount', 'billing.insuranceStatus'];
+    case 'APPOINTMENT':
+      // Appointment issues don't need department, staff, medication, or billing
+      return ['typeOfCare', 'people.role', 'medication.name', 'billing.amount', 'billing.insuranceStatus'];
+    case 'BILLING':
+      // Billing complaints might need department but not medication unless specifically mentioned
+      return ['medication.name', 'people.role'];
+    case 'MEDICATION':
+      // Medication complaints don't need billing or wait time info
+      return ['billing.amount', 'billing.insuranceStatus', 'typeOfCare'];
+    case 'DIAGNOSIS':
+    case 'PROCEDURE':
+    case 'FOLLOW_UP':
+    case 'SAFETY':
+      // Clinical complaints don't need billing or wait time
+      return ['billing.amount', 'billing.insuranceStatus'];
+    case 'COMMUNICATION':
+    case 'ATTITUDE':
+    case 'RESPECT':
+    case 'PROFESSIONALISM':
+      // Relationship complaints don't need medication or billing
+      return ['medication.name', 'billing.amount', 'billing.insuranceStatus', 'typeOfCare'];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Smart contextual filter for BILLING complaints
+ * Analyzes complaint description to determine if billing amount/insurance are actually relevant
+ * Example: "name on bill was wrong" → don't ask for amount/insurance
+ * Example: "overcharged $500" → do ask for amount/insurance details
+ */
+function filterBillingFields(fieldsToProcess: string[], description: string | undefined): string[] {
+  if (!description || !fieldsToProcess.includes('billing.amount')) {
+    return fieldsToProcess;
+  }
+
+  const desc = description.toLowerCase();
+  
+  // Keywords indicating ADMINISTRATIVE ERROR (not amount/charge issue)
+  const adminErrorKeywords = ['name', 'address', 'wrong details', 'details wrong', 'incorrect name', 'incorrect address', 'wasn\'t checked', 'not checked', 'didn\'t check', 'didnt check', 'staff didn\'t', 'error', 'mistake', 'incorrect info', 'wrong info'];
+  const isAdminError = adminErrorKeywords.some(keyword => desc.includes(keyword));
+
+  // Keywords indicating AMOUNT/CHARGE issue
+  const chargeKeywords = ['charged', 'charge', 'overcharged', 'amount', 'cost', 'expensive', 'too much', 'extra', 'double', 'unexpected charge', 'wrong amount'];
+  const isChargeIssue = chargeKeywords.some(keyword => desc.includes(keyword));
+
+  // If it's an admin error (name, address, not checked), remove billing amount/insurance questions
+  if (isAdminError && !isChargeIssue) {
+    console.log(`[filterBillingFields] Detected ADMIN ERROR (not charge issue) → removing billing.amount, billing.insuranceStatus`);
+    return fieldsToProcess.filter((f: string) => !f.includes('billing.amount') && !f.includes('billing.insuranceStatus'));
+  }
+
+  return fieldsToProcess;
+}
+
 const IMPACT_OPTIONS = [
   "1. Physical symptoms worsened or new symptoms",
   "2. Emotional stress or anxiety",
@@ -54,71 +260,15 @@ function normalizeInput(text: string): string {
 }
 
 // Map free text or numeric selection to a canonical typeOfCare value
+// Now uses data-driven config instead of hardcoded if-else
 function mapTypeOfCareInputToValue(input: string): string | null {
-  const raw = normalizeInput(input);
-  const numMatch = raw.match(/^(\d{1,2})/);
-  if (numMatch) {
-    const n = parseInt(numMatch[1]!, 10);
-    const mapping: Record<number, string> = {
-      1: "Emergency Department",
-      2: "Specialist Clinic",
-      3: "Surgery",
-      4: "Endoscopy",
-      5: "Dialysis",
-      6: "Laboratory/Blood Test",
-      7: "Radiology/Imaging",
-      8: "Pharmacy",
-      9: "Inpatient Ward",
-    };
-    if (mapping[n]) return mapping[n];
-  }
-  const synonyms: Array<{canonical: string; keys: string[]}> = [
-    { canonical: "Emergency Department", keys: ["emergency","ed","er","a&e","accident and emergency"] },
-    { canonical: "Specialist Clinic", keys: ["specialist","clinic","outpatient"] },
-    { canonical: "Surgery", keys: ["surgery","operation","op","day surgery"] },
-    { canonical: "Endoscopy", keys: ["endoscopy","scope","gastroscopy","colonoscopy"] },
-    { canonical: "Dialysis", keys: ["dialysis","haemodialysis","hemodialysis","peritoneal","pd","hd"] },
-    { canonical: "Laboratory/Blood Test", keys: ["laboratory","lab","blood test","phlebotomy"] },
-    { canonical: "Radiology/Imaging", keys: ["radiology","imaging","x-ray","xray","mri","ct","scan","ultrasound"] },
-    { canonical: "Pharmacy", keys: ["pharmacy","dispensary","medication collection"] },
-    { canonical: "Inpatient Ward", keys: ["inpatient","ward","admission","hospitalised","hospitalized","stay"] },
-  ];
-  for (const item of synonyms) {
-    if (item.keys.some(k => raw.includes(k))) return item.canonical;
-  }
-  return null;
+  return mapInputToCanonical(input, TYPE_OF_CARE_MAPPINGS, true);
 }
 
 // Map free text or numeric selection to a canonical impact value
+// Now uses data-driven config instead of hardcoded if-else
 function mapImpactInputToValue(input: string): string | null {
-  const raw = normalizeInput(input);
-  const numMatch = raw.match(/^(\d{1,2})/);
-  if (numMatch) {
-    const n = parseInt(numMatch[1]!, 10);
-    const mapping: Record<number, string> = {
-      1: "Physical symptoms worsened or new symptoms",
-      2: "Emotional stress or anxiety",
-      3: "Financial cost or unexpected charges",
-      4: "Treatment delay or missed care",
-      5: "Daily life affected (work/school/family)",
-      6: "Safety risk or harm",
-      7: "Other (please describe)",
-    };
-    if (mapping[n]) return mapping[n];
-  }
-  const synonyms: Array<{canonical: string; keys: string[]}> = [
-    { canonical: "Physical symptoms worsened or new symptoms", keys: ["sicker","worse","pain","side effect","dizzy","nausea","vomit","rash","symptom"] },
-    { canonical: "Emotional stress or anxiety", keys: ["stress","anxiety","upset","angry","frustrated","worried","depressed"] },
-    { canonical: "Financial cost or unexpected charges", keys: ["cost","money","charge","bill","expensive","paid","payment"] },
-    { canonical: "Treatment delay or missed care", keys: ["delay","postponed","missed","reschedule","late","pushed"] },
-    { canonical: "Daily life affected (work/school/family)", keys: ["work","school","family","caregiving","commute","time","leave"] },
-    { canonical: "Safety risk or harm", keys: ["risk","harm","danger","unsafe","safety"] },
-  ];
-  for (const item of synonyms) {
-    if (item.keys.some(k => raw.includes(k))) return item.canonical;
-  }
-  if (raw.includes("other")) return "Other (please describe)";
-  return null;
+  return mapInputToCanonical(input, IMPACT_MAPPINGS, true);
 }
 
 function validateDate(dateString: string): ValidationResult {
@@ -450,44 +600,79 @@ export async function determineMissingFields(state: GraphState): Promise<Partial
     urgencyLevel: complaint.urgencyLevel,
   };
 
-  // Remove undefined values
-  const knownFields = Object.entries(currentInfo)
-    .filter(([_, value]) => value !== undefined)
+  // Filter out fields that are set to 'unknown' (user skipped them)
+  const knownInfo = Object.entries(currentInfo)
+    .filter(([_, value]) => value !== undefined && (value as any) !== 'unknown' && (!Array.isArray(value) || (Array.isArray(value) && (value[0] as any) !== 'unknown')))
+    .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+
+  // Remove undefined values (use knownInfo which excludes 'unknown' values)
+  const knownFields = Object.entries(knownInfo)
     .map(([key, value]) => `${key}: ${value}`)
     .join(', ');
 
   const determinePrompt = `You are a hospital complaint intake specialist. Analyze what information we have and determine what ADDITIONAL information would be genuinely useful for properly handling this complaint.
 
-**CRITICAL FOR ESCALATION**: Always try to collect:
-1. event.date - When did this happen? (essential for investigation)
-2. typeOfCare - What service/department? (routing to correct team)
-3. people.role - Who was involved? (accountability)
-4. impact - How did this affect the patient? (severity/urgency)
-5. event.location - ONLY if the user mentions wrong location, different facility, or unclear venue (otherwise default to the hospital config)
-
-**CONTACT DETAILS (REQUIRED FOR FOLLOW-UP)**: After collecting complaint details, ALWAYS collect:
-- contactDetails.name - Complainant's name (required)
-- contactDetails.email - Email address (required)
-- contactDetails.contactNo - Contact number (required)
-- contactDetails.isPatient - Are they the patient? (required - true/false)
-- contactDetails.wantsContact - Do they want us to contact them? (required - true/false)
-- contactDetails.address - Address (optional, skip if they don't provide)
-
 Complaint Type: ${complaint.subcategory} (${complaint.domain})
-
+User's Complaint Description: "${complaint.description}"
 Information Already Collected:
 ${knownFields || 'Only basic complaint classification'}
 
-Be SMART and CONTEXT-AWARE:
-- For BILLING complaints: ONLY ask for amount if relevant. Insurance may not be needed for all billing issues
-- For WAIT_TIME complaints: Ask for date, type of care (unless already provided)
-- For MEDICATION complaints: Ask for medication name, date, impact
-- For ATTITUDE/COMMUNICATION complaints: Ask for staff role involved
-- For CLINICAL complaints: Ask for date, type of care, impact (as relevant)
-- LOCATION: default is the primary hospital, but if the user mentions wrong location, other facility, or unclear venue, collect event.location
-- If the description is detailed and specific, we may NOT need more info
+**CONTEXT-AWARE FIELD SELECTION RULES:**
+
+For FACILITIES complaints (wayfinding, noise, cleanliness, comfort, equipment):
+- DO collect: event.location (area/ward), impact (how it affected them)
+- DO NOT collect: typeOfCare (not relevant for facility feedback), people.role
+- Example: "Toilet hard to find" → only ask for location, not department/service
+
+For WAIT_TIME complaints:
+- DO collect: event.date, typeOfCare (which service), impact if severe
+- DO NOT collect: people.role, billing
+
+For BILLING complaints - ANALYZE THE SPECIFIC ISSUE:
+- If about WRONG AMOUNT/OVERCHARGE → collect: event.date, typeOfCare, billing.amount, insuranceStatus
+- If about NAME/ADDRESS/ERROR on bill → collect: event.date, impact (only)
+- If about staff not checking/verifying → collect: people.role (who didn't check?), event.date, impact
+- DO NOT collect: fields not directly related to the specific billing issue
+
+**CRITICAL - What NOT to Ask (even if category seems to match):**
+- DON'T ask "Do you have insurance?" for billing complaints about WRONG NAME/WRONG DETAILS on bill
+- DON'T ask "How much was charged?" for billing complaints about staff not verifying/checking
+- DON'T ask "Which department?" for facility complaints about physical environment
+- DON'T ask "What service?" if user already described the location/area
+- DON'T repeat asking for details user has already provided in description
+- DON'T ask unrelated fields just because they're in the category checklist
+
+For APPOINTMENT complaints:
+- DO collect: event.date
+- DO NOT collect: typeOfCare, people.role
+
+For MEDICATION/CLINICAL complaints:
+- DO collect: event.date, medication.name, impact
+- DO NOT collect: typeOfCare unless truly relevant
+
+For ATTITUDE/COMMUNICATION/PROFESSIONALISM complaints:
+- DO collect: people.role (staff involved), event.date
+- DO NOT collect: typeOfCare, billing, medication
+
+For SAFETY complaints:
+- DO collect: event.date, impact (high priority), people.role if known
+- DO NOT collect: typeOfCare
+
+**CONTACT DETAILS (REQUIRED FOR FOLLOW-UP)**: ALWAYS collect:
+- contactDetails.wantsContact FIRST - Do they want to be contacted? (required - true/false)
+- Only ask for name/email/phone/isPatient if wantsContact=true
+
+**GENERAL RULES:**
+- Be SMART and CONTEXT-AWARE - analyze the SPECIFIC complaint, not just the category
 - Avoid asking for non-essential fields
-- ALWAYS collect contact details at the end (name, email, contact number, isPatient, wantsContact)
+- If user has already explained the core issue in detail, DON'T ask for more of the same
+- If user hasn't mentioned IMPACT (how it affected them), prioritize asking about IMPACT
+- Examples:
+  * User says "bill name was wrong" → Ask: "How did this affect you?" | DON'T ask: "how much?" or "insurance?"
+  * User says "waited 5 hours" → Ask: "How did that affect you?" | DON'T ask: "do you have insurance?"
+  * User says "staff didn't check" → Ask: "How did this impact you?" | DON'T ask: unrelated fields
+- When in doubt: ask fewer questions, prioritize impact, then move to contact details
+
 
 Respond with JSON array of fields STILL NEEDED. Use these field names ONLY:
 [
@@ -498,28 +683,14 @@ Respond with JSON array of fields STILL NEEDED. Use these field names ONLY:
   "medication.name",
   "people.role",
   "impact",
+  "contactDetails.wantsContact",
+  "contactDetails.isPatient",
   "contactDetails.name",
   "contactDetails.email",
   "contactDetails.contactNo",
-  "contactDetails.isPatient",
-  "contactDetails.wantsContact",
-  "contactDetails.address"
 ]
 
-IMPORTANT: Include "event.location" ONLY when the user hints at wrong/other/unclear location
-
-Examples:
-- "My bill is $500" → ["billing.insuranceStatus"] OR [] (depends if insurance is relevant to the issue)
-- "I was charged for the wrong procedure" → [] (description sufficient, no additional fields needed)
-- "Long wait time yesterday" → ["typeOfCare"] (date already known)
-- "Rude nurse" → ["people.role", "event.date"] (need specifics about who and when)
-- "Rude nurse in the ER" → [] (already specific enough)
-- "Doctor prescribed wrong medication" → ["medication.name"] (if not already mentioned)
-
-IMPORTANT: Be selective. Don't ask for information that isn't truly necessary to handle the complaint.
-ALWAYS include contact detail fields at the end if not yet collected.
-
-Respond ONLY with JSON array: ["field1", "field2"] or [] if complete.`;
+Only include fields that are needed. Omit fields not mentioned.`;
 
   try {
     const response = await llm.invoke(determinePrompt);
@@ -533,10 +704,108 @@ Respond ONLY with JSON array: ["field1", "field2"] or [] if complete.`;
     }
     
     const missingFields = JSON.parse(jsonMatch[0]);
+
+    // FILTER 1: Remove irrelevant fields based on complaint category (static rules)
+    const irrelevantFields = getIrrelevantFields(complaint.subcategory);
+    let fieldsToProcess = Array.isArray(missingFields) ? missingFields.filter((f: string) => !irrelevantFields.includes(f)) : [];
     
-    console.log(`[determineMissingFields] LLM requested fields: [${missingFields.join(', ')}]`);
+    console.log(`[determineMissingFields] LLM returned: [${Array.isArray(missingFields) ? missingFields.join(', ') : 'none'}]`);
+    console.log(`[determineMissingFields] Filtered irrelevant (${irrelevantFields.join(', ')}): [${fieldsToProcess.join(', ')}]`);
+
+    // FILTER 1B: For BILLING complaints, apply smart contextual filtering
+    if (complaint.subcategory === 'BILLING') {
+      fieldsToProcess = filterBillingFields(fieldsToProcess, complaint.description);
+      console.log(`[determineMissingFields] After billing context filter: [${fieldsToProcess.join(', ')}]`);
+    }
+
+    // FILTER 2: Handle contact fields based on user preference
+    const wantsContact = (complaint.contactDetails?.wantsContact as any) === true || (complaint.contactDetails?.wantsContact as any) === 'true';
     
-    return { missingFields: Array.isArray(missingFields) ? missingFields : [] };
+    if (!wantsContact) {
+      // User doesn't want contact - remove all contact detail fields except wantsContact
+      fieldsToProcess = fieldsToProcess.filter((f: string) => !f.startsWith('contactDetails.') || f === 'contactDetails.wantsContact');
+      console.log(`[determineMissingFields] User doesn't want contact - filtered contact fields`);
+    } else if (wantsContact && !complaint.contactDetails?.wantsContact) {
+      // This shouldn't happen, but just in case
+      console.log(`[determineMissingFields] wantsContact is true but not set in complaint`);
+    } else if (wantsContact && complaint.contactDetails?.wantsContact) {
+      // User WANTS contact - ensure we ask for contact details if they're in missingFields
+      // Don't filter them out; let them be asked
+      console.log(`[determineMissingFields] User wants contact - keeping contact detail fields`);
+    }
+
+    // SAFEGUARD: If we have no fields and haven't asked about contact yet, add wantsContact
+    if (fieldsToProcess.length === 0 && !complaint.contactDetails?.wantsContact) {
+      console.log(`[determineMissingFields] No fields to ask - adding wantsContact`);
+      fieldsToProcess.push('contactDetails.wantsContact');
+    }
+
+    // ENHANCEMENT: If user said yes to contact, make sure we ask for their contact details
+    // by adding them to the fields if they're missing
+    if (wantsContact && complaint.contactDetails?.wantsContact === true) {
+      const contactFieldsNeeded = [];
+      if (!complaint.contactDetails?.name) contactFieldsNeeded.push('contactDetails.name');
+      if (!complaint.contactDetails?.email) contactFieldsNeeded.push('contactDetails.email');
+      if (!complaint.contactDetails?.contactNo) contactFieldsNeeded.push('contactDetails.contactNo');
+      if (complaint.contactDetails?.isPatient === undefined || complaint.contactDetails?.isPatient === null) {
+        contactFieldsNeeded.push('contactDetails.isPatient');
+      }
+      
+      // Add any missing contact fields that aren't already in fieldsToProcess
+      for (const field of contactFieldsNeeded) {
+        if (!fieldsToProcess.includes(field)) {
+          fieldsToProcess.push(field);
+          console.log(`[determineMissingFields] Added contact field to ask: ${field}`);
+        }
+      }
+    }
+
+    console.log(`[determineMissingFields] Final fieldsToProcess: [${fieldsToProcess.join(', ')}]`);
+
+    // Generic filter: Never re-ask fields that have been attempted or already have values
+    const fieldAttempts = state.fieldAttempts || {};
+    const filteredFields = Array.isArray(fieldsToProcess) ? fieldsToProcess.filter((f: string) => {
+      // Rule 1: If we've already attempted this field, don't ask again (field has been asked before)
+      if (fieldAttempts[f] && fieldAttempts[f] > 0) {
+        console.log(`[determineMissingFields] Filtering out ${f} - already attempted ${fieldAttempts[f]} time(s)`);
+        return false;
+      }
+
+      // Rule 2: Check if field already has a non-empty, non-'unknown' value in complaint
+      const hasValue = (fieldPath: string): boolean => {
+        const [top, sub] = fieldPath.split('.');
+        const obj = (complaint as any)[top as any];
+        if (!obj) return false;
+        if (sub) {
+          const val = obj[sub];
+          return val !== undefined && val !== null && (val as any) !== 'unknown' && 
+                 !(Array.isArray(val) && (val[0] as any) === 'unknown');
+        } else {
+          const val = obj;
+          return val !== undefined && val !== null && (val as any) !== 'unknown' && 
+                 !(Array.isArray(val) && (val[0] as any) === 'unknown');
+        }
+      };
+
+      if (hasValue(f)) {
+        console.log(`[determineMissingFields] Filtering out ${f} - already has value in complaint`);
+        return false;
+      }
+
+      return true;
+    }) : [];
+
+    const contactPrefixes = ['contactDetails.'];
+    const isContactField = (f: string) => contactPrefixes.some(prefix => f.startsWith(prefix));
+    const reordered = [...filteredFields.filter((f: string) => !isContactField(f)), ...filteredFields.filter((f: string) => isContactField(f))];
+    
+    // SAFEGUARD: Remove contactDetails.address (removed from schema)
+    const finalFields = reordered.filter((f: string) => f !== 'contactDetails.address');
+    
+    console.log(`[determineMissingFields] LLM requested fields (filtered & ordered): [${finalFields.join(', ')}]`);
+    console.log(`[determineMissingFields] RETURNING missingFields with length: ${finalFields.length}`);
+    
+    return { missingFields: finalFields };
   } catch (error) {
     console.error("Error determining missing fields:", error);
     // Fallback: no additional fields needed
@@ -552,24 +821,32 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
     return {};
   }
 
-  // Pick the first missing field
-  const fieldToAsk = missingFields[0];
+  const situationMissing = missingFields.filter((f: string) => !f.startsWith('contactDetails.'));
+  const contactMissing = missingFields.filter((f: string) => f.startsWith('contactDetails.'));
+
+  // Prioritize a situation field (non-contact) for the next question when available
+  const fieldToAsk = (situationMissing.length > 0) ? situationMissing[0] : missingFields[0];
   if (!fieldToAsk) {
     return {};
   }
+
+  // Reorder missingFields so the field we're asking is first (so skips remove the right one)
+  const orderedMissingFields = [fieldToAsk, ...missingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === missingFields.indexOf(fieldToAsk)) )];
   
   const fieldAttempts: Record<string, number> = state.fieldAttempts || {};
   const currentAttempts = fieldAttempts[fieldToAsk] || 0;
   
-  console.log(`[askClarifyingQuestion] Asking for field: "${fieldToAsk}" (attempt ${currentAttempts + 1}), remaining: [${missingFields.slice(1).join(', ')}]`);
+  const remainingAfterThis = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
+  console.log(`[askClarifyingQuestion] Asking for field: "${fieldToAsk}" (attempt ${currentAttempts + 1}), remaining: [${remainingAfterThis.join(', ')}]`);
   
   // If we've already asked twice and they still can't answer, skip this field
   if (currentAttempts >= 2) {
     console.log(`[askClarifyingQuestion] Field "${fieldToAsk}" attempted ${currentAttempts} times, SKIPPING`);
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = 0;
+    const remainingFields = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
     return {
-      missingFields: missingFields.slice(1), // Remove this field and move on
+      missingFields: remainingFields, // Remove this field and move on
       fieldAttempts: updatedAttempts, // Reset counter
     };
   }
@@ -577,7 +854,7 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
   // Check if this is the first question (no attempts yet on any field) - use bundled empathetic approach
   const isFirstQuestion = Object.keys(fieldAttempts).length === 0 || Object.values(fieldAttempts).every(v => v === 0);
   
-  if (isFirstQuestion && missingFields.length >= 2) {
+  if (isFirstQuestion && situationMissing.length >= 1) {
     // Bundle multiple related questions with empathy for better UX
     const empathyMap: Record<string, string> = {
       'ATTITUDE': "I'm sorry you experienced that.",
@@ -590,32 +867,50 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       'FACILITY': "I'm sorry about the facility issue you experienced.",
     };
     
-    const empathyPrefix = empathyMap[complaint.domain as string] || "I'm sorry this happened.";
+    const empathyPrefix = getContextualEmpathyPrefix(complaint.subcategory);
     
-    // Build bullet list of what we need
-    const fieldDescriptions: Record<string, string> = {
-      'event.date': 'When did this happen?',
-      'event.location': 'Where exactly did this occur?',
-      'typeOfCare': 'Which department or service? (Emergency, Clinic, Ward, etc.)',
-      'people.role': 'Who was involved? (role or name if known)',
-      'medication.name': 'Which medication was involved?',
-      'billing.amount': 'What was the amount charged?',
-      'billing.insuranceStatus': 'Insurance coverage details (if relevant)',
-      'impact': 'How did this affect you?',
-      'contactDetails.name': 'Your name',
-      'contactDetails.email': 'Your email address',
-      'contactDetails.contactNo': 'Your contact number',
-      'contactDetails.isPatient': 'Are you the patient? (Yes/No)',
-      'contactDetails.wantsContact': 'Would you like us to contact you? (Yes/No)',
-      'contactDetails.address': 'Your address (optional)',
+    // Get contextual questions based on complaint category
+    const contextualQuestions = getContextualQuestions(complaint.subcategory, complaint);
+    const irrelevantFields = getIrrelevantFields(complaint.subcategory);
+    
+    // Filter contextual questions to only show relevant ones based on missing fields
+    // Map common contextual question patterns to fields they ask for
+    const questionFieldMap: Record<string, string[]> = {
+      'Which area': ['event.location'],
+      'When did': ['event.date'],
+      'How did this': ['impact'],
+      'Which medication': ['medication.name'],
+      'Who was': ['people.role'],
+      'What service': ['typeOfCare'],
+      'What was': ['impact', 'people.role'],
+      'Which department': ['typeOfCare'],
     };
     
-    const fieldsToAsk = missingFields.slice(0, 4); // Ask up to 4 fields at once
-    const bulletPoints = fieldsToAsk
-      .map(f => `• ${fieldDescriptions[f] || f}`)
+    // Filter to only show questions for fields that are actually in missingFields
+    const relevantContextualQuestions = contextualQuestions.filter((q: string) => {
+      // Check if any key in the question matches a field we're actually asking for
+      const isRelevant = Object.entries(questionFieldMap).some(([key, fields]) => {
+        if (q.includes(key)) {
+          return fields.some(f => orderedMissingFields.includes(f) || situationMissing.includes(f));
+        }
+        return false;
+      });
+      
+      // If it doesn't match the map, include it (be permissive for edge cases)
+      if (!isRelevant && Object.keys(questionFieldMap).every(key => !q.includes(key))) {
+        return true;
+      }
+      
+      return isRelevant;
+    });
+    
+    // Show up to 3 relevant questions
+    const bulletPoints = relevantContextualQuestions
+      .slice(0, 3)
+      .map((q: string) => `• ${q}`)
       .join('\n');
     
-    const question = `${empathyPrefix} To help us investigate and provide feedback, could you share:\n\n${bulletPoints}\n\nShare what you remember - approximate details are fine.`;
+    const question = `${empathyPrefix} To help us investigate and provide feedback, could you share:\n\n${bulletPoints}\n\nShare what you remember - approximate details are fine. If you don't know, just say "don't know" and we'll move on.`;
     
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
@@ -625,12 +920,13 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       currentQuestion: question,
       messages: updatedMessages,
       fieldAttempts: updatedAttempts,
+      missingFields: orderedMissingFields,
     };
   }
 
   // OPTIMIZATION: For typeOfCare, provide dropdown-style options instead of open-ended question
   if (fieldToAsk === "typeOfCare") {
-    const question = `To route your concern to the right department, could you tell me which service or department this was related to?\n\n${renderTypeOfCareOptionsText()}\n\nYou can reply with the number or name.`;
+    const question = `To route your concern to the right department, could you tell me which service or department this was related to?\n\n${renderTypeOfCareOptionsText()}\n\nYou can reply with the number or name. If you don't know, just say "don't know" and we'll move on.`;
     
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
@@ -640,12 +936,13 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       currentQuestion: question,
       messages: updatedMessages,
       fieldAttempts: updatedAttempts,
+      missingFields: orderedMissingFields,
     };
   }
   
   // NEW: For impact, provide dropdown-style options to reduce ambiguity
   if (fieldToAsk === "impact") {
-    const question = `I'm sorry this happened. How did this affect you?\n\n${IMPACT_OPTIONS.join('\n')}\n\nYou can reply with the number, a few words, or skip.`;
+    const question = `I'm sorry this happened. How did this affect you?\n\n${IMPACT_OPTIONS.join('\n')}\n\nYou can reply with the number, a few words, or skip. If you don't know, just say "don't know" and we'll move on.`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -654,18 +951,16 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       currentQuestion: question,
       messages: updatedMessages,
       fieldAttempts: updatedAttempts,
+      missingFields: orderedMissingFields,
     };
   }
   
-  // Handle contact detail fields - bundle them together for better UX
+  // Handle contact detail fields - first ask if they want to be contacted (opt-in flow)
   const contactFields = ['contactDetails.name', 'contactDetails.email', 'contactDetails.contactNo', 'contactDetails.isPatient', 'contactDetails.wantsContact'];
   if (contactFields.includes(fieldToAsk)) {
-    // Check how many contact fields are still missing
-    const missingContactFields = missingFields.filter(f => contactFields.includes(f));
-    
-    if (missingContactFields.length >= 3) {
-      // Ask for all main contact details at once
-      const question = `Thank you for sharing this information. To help us follow up with you, could you please provide:\n\n• Your name\n• Your email address\n• Your contact number\n• Are you the patient? (Yes/No)\n• Would you like us to contact you about this? (Yes/No)\n\nYou can share these details in any format.`;
+    // If asking for wantsContact, do it FIRST before any other contact details
+    if (fieldToAsk === 'contactDetails.wantsContact') {
+      const question = `Thank you for sharing this information. Would you like us to contact you regarding this complaint? (Yes/No)`;
       
       const updatedMessages = [...state.messages, new AIMessage(question)];
       const updatedAttempts: Record<string, number> = { ...fieldAttempts };
@@ -675,13 +970,40 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
         currentQuestion: question,
         messages: updatedMessages,
         fieldAttempts: updatedAttempts,
+        missingFields: orderedMissingFields,
+      };
+    }
+    
+    // Only ask for other contact details if user wants to be contacted
+    const wantsContact = (complaint.contactDetails?.wantsContact as any) === true || (complaint.contactDetails?.wantsContact as any) === 'true';
+    if (!wantsContact && fieldToAsk !== 'contactDetails.wantsContact') {
+      // User doesn't want contact - end conversation (no additional questions)
+      return {};
+    }
+    
+    // If asking for other contact details, ask them one by one or bundled
+    const missingContactFields = missingFields.filter((f: string) => contactFields.includes(f));
+    
+    if (missingContactFields.length >= 2) {
+      // Ask for main contact details (skip wantsContact as we already have it)
+      const question = `Thank you. To help us follow up with you, could you please provide:\n\n• Your name\n• Your email address\n• Your contact number\n• Are you the patient? (Yes/No)\n\nPlease separate your answers with commas (e.g., John Doe, john@email.com, 555-1234, Yes).`;
+      
+      const updatedMessages = [...state.messages, new AIMessage(question)];
+      const updatedAttempts: Record<string, number> = { ...fieldAttempts };
+      updatedAttempts[fieldToAsk] = currentAttempts + 1;
+      
+      return {
+        currentQuestion: question,
+        messages: updatedMessages,
+        fieldAttempts: updatedAttempts,
+        missingFields: orderedMissingFields,
       };
     }
   }
   
   // Handle isPatient yes/no question
   if (fieldToAsk === "contactDetails.isPatient") {
-    const question = `Are you the patient, or are you submitting this feedback on behalf of someone else?`;
+    const question = `Are you the patient, or are you submitting this feedback on behalf of someone else? (Yes/No)`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -690,12 +1012,13 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       currentQuestion: question,
       messages: updatedMessages,
       fieldAttempts: updatedAttempts,
+      missingFields: orderedMissingFields,
     };
   }
   
   // Handle wantsContact yes/no question
   if (fieldToAsk === "contactDetails.wantsContact") {
-    const question = `Would you like us to contact you regarding this feedback?`;
+    const question = `Would you like us to contact you regarding this feedback? (Yes/No)`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -704,6 +1027,7 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       currentQuestion: question,
       messages: updatedMessages,
       fieldAttempts: updatedAttempts,
+      missingFields: orderedMissingFields,
     };
   }
   
@@ -729,7 +1053,7 @@ Examples:
 Generate ONLY the question, nothing else.`;
 
   const response = await llm.invoke(questionPrompt);
-  const question = response.content.toString().trim();
+  const question = `${response.content.toString().trim()} If you don't know, just say "don't know" and we'll move on.`;
 
   // Add assistant message to history
   const updatedMessages = [...state.messages, new AIMessage(question)];
@@ -741,6 +1065,7 @@ Generate ONLY the question, nothing else.`;
     currentQuestion: question,
     messages: updatedMessages,
     fieldAttempts: updatedAttempts,
+    missingFields: orderedMissingFields,
   };
 }
 
@@ -768,43 +1093,13 @@ export async function interpretUserResponse(state: GraphState): Promise<Partial<
     /what'?s (that|this)/i,
   ];
   
-  const skipPatterns = [
-    /i don'?t know/i,
-    /i do not know/i,
-    /\bidk\b/i,
-    /not sure/i,
-    /unsure/i,
-    /no idea/i,
-    /prefer not to say/i,
-    /rather not say/i,
-    /skip/i,
-    /pass/i,
-    /not applicable/i,
-    /n\/a/i,
-  ];
-
   // Fast path: User is clearly asking for clarification
-  if (questionPatterns.some(pattern => pattern.test(userResponse))) {
+  if (isClarificationRequest(userResponse)) {
     const field = missingFields?.[0] || "";
-    let explanation = "";
-
-    if (field.includes("typeOfCare")) {
-      explanation = `I understand you need clarification. I'm asking which service or department you visited at SGH. Here are the main options:\n\n${renderTypeOfCareOptionsText()}\n\nYou can reply with the number or the name of the service. If you're not sure, that's completely fine - just give your best guess or we can move on.`;
-    } else if (field.includes("insurance")) {
-      explanation = `I'm happy to explain. Health insurance is the coverage that helps pay for medical costs. This could be:\n- Employer insurance\n- Government programs (Medicare, Medicaid)\n- Private insurance\n- Or no insurance\n\nIf you don't have this information or prefer not to answer, that's perfectly okay.`;
-    } else if (field.includes("billing.amount")) {
-      explanation = `Of course. I'm asking about the dollar amount on your bill or charge. If you don't have the bill handy or don't remember the exact amount, no worries - we can skip this.`;
-    } else if (field.includes("event.date")) {
-      explanation = `I'm asking when this happened - the date of your appointment or when the issue occurred. You can say it however is easiest for you, like "yesterday", "June 24", or "last Tuesday".`;
-    } else if (field.includes("medication.name")) {
-      explanation = `I'm asking for the name of the medication involved. If you don't remember the exact name, you can describe it (like "the blood pressure pill" or "the painkiller") or we can skip this.`;
-    } else if (field.includes("people.role")) {
-      explanation = `I'm asking who you were dealing with - for example: doctor, nurse, receptionist, billing staff, etc. Just describe them in your own words.`;
-    } else if (field.includes("impact")) {
-      explanation = `I'm asking how this situation affected you. For example: did it cause pain, stress, financial burden, delayed treatment, or other consequences? Share what feels relevant to you.`;
-    } else {
-      explanation = `I understand you need clarification. If you're not sure how to answer or don't have this information, that's completely okay - just let me know and we can move on.`;
-    }
+    // Get explanation from config, fall back to generic if not found
+    const fieldDef = field ? getFieldDefinition(field) : undefined;
+    const explanation = fieldDef?.explanation || 
+      `I understand you need clarification. If you're not sure how to answer or don't have this information, that's completely okay - just let me know and we can move on.`;
 
     console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: CLARIFY detected`);
     return {
@@ -813,25 +1108,42 @@ export async function interpretUserResponse(state: GraphState): Promise<Partial<
   }
   
   // Fast path: User wants to skip
-  if (skipPatterns.some(pattern => pattern.test(userResponse))) {
-    const updatedMissingFields = missingFields?.slice(1) || [];
-    console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: SKIP detected`);
+  if (isSkip(userResponse)) {
+    const fieldToSkip = missingFields?.[0];
+    const updatedMissingFields = fieldToSkip
+      ? (state.missingFields || []).filter((f: string, idx: number) => !(f === fieldToSkip && idx === (state.missingFields || []).indexOf(fieldToSkip)))
+      : (state.missingFields || []).slice(1) || [];
+
+    const updatedComplaint = { ...state.complaint } as any;
+    // Mark skipped fields as 'unknown' to prevent re-asking (data-driven approach)
+    if (fieldToSkip) {
+      const updated = setUnknownValue(updatedComplaint, fieldToSkip);
+      Object.assign(updatedComplaint, updated);
+    }
+
+    const fieldAttempts = state.fieldAttempts || {};
+    const resetAttempts = { ...fieldAttempts };
+    if (fieldToSkip) delete resetAttempts[fieldToSkip];
+
+    console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: SKIP detected for ${fieldToSkip || 'unknown field'}`);
     const ack = "No worries, we'll skip that and move on.";
     return {
       missingFields: updatedMissingFields,
       currentQuestion: undefined,
+      complaint: updatedComplaint,
+      fieldAttempts: resetAttempts,
       messages: [...state.messages, new AIMessage(ack)],
     };
   }
 
-  // Fast path: If response is > 3 words and not a question, assume it's an answer
-  const wordCount = userResponse.split(/\s+/).length;
-  if (wordCount >= 3 && !userResponse.includes('?')) {
-    console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: ANSWER detected (${wordCount} words)`);
+  // Fast path: Determine user intent from their response
+  const userIntent = determineUserIntent(userResponse);
+  if (userIntent === 'ANSWER') {
+    console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: ANSWER detected via intent analysis`);
     return {}; // Proceed to update (ANSWER)
   }
 
-  // Fallback to LLM only for ambiguous cases
+  // Fallback to LLM only for truly ambiguous cases
   const interpretPrompt = `You are analyzing a user's response to a question in a hospital complaint intake process.
 
 Question Asked: "${currentQuestion}"
@@ -845,13 +1157,13 @@ Determine the intent of the user's response:
 Respond with ONLY ONE WORD: ANSWER, CLARIFY, or SKIP`;
 
   const response = await llm.invoke(interpretPrompt);
-  const intent = response.content.toString().trim().toUpperCase();
+  const llmIntent = response.content.toString().trim().toUpperCase();
 
-  if (intent.includes("CLARIFY")) {
+  if (llmIntent.includes("CLARIFY")) {
     return await provideFieldExplanation(missingFields?.[0] || "", state);
   }
 
-  if (intent.includes("SKIP")) {
+  if (llmIntent.includes("SKIP")) {
     const updatedMissingFields = missingFields?.slice(1) || [];
     return {
       missingFields: updatedMissingFields,
@@ -866,26 +1178,10 @@ Respond with ONLY ONE WORD: ANSWER, CLARIFY, or SKIP`;
  * Helper function to provide field explanations (extracted for reuse)
  */
 async function provideFieldExplanation(field: string, state: GraphState): Promise<Partial<GraphState>> {
-    // User needs clarification - provide warm, helpful explanation
-    let explanation = "";
-
-    if (field.includes("typeOfCare")) {
-      explanation = `I understand you need clarification. I'm asking which service or department you visited at SGH. Here are the main options:\n\n${renderTypeOfCareOptionsText()}\n\nYou can reply with the number or the name of the service. If you're not sure, that's completely fine - just give your best guess or we can move on.`;
-    } else if (field.includes("insurance")) {
-      explanation = `I'm happy to explain. Health insurance is the coverage that helps pay for medical costs. This could be:\n- Employer insurance\n- Government programs (Medicare, Medicaid)\n- Private insurance\n- Or no insurance\n\nIf you don't have this information or prefer not to answer, that's perfectly okay.`;
-    } else if (field.includes("billing.amount")) {
-      explanation = `Of course. I'm asking about the dollar amount on your bill or charge. If you don't have the bill handy or don't remember the exact amount, no worries - we can skip this.`;
-    } else if (field.includes("event.date")) {
-      explanation = `I'm asking when this happened - the date of your appointment or when the issue occurred. You can say it however is easiest for you, like "yesterday", "June 24", or "last Tuesday".`;
-    } else if (field.includes("medication.name")) {
-      explanation = `I'm asking for the name of the medication involved. If you don't remember the exact name, you can describe it (like "the blood pressure pill" or "the painkiller") or we can skip this.`;
-    } else if (field.includes("people.role")) {
-      explanation = `I'm asking who you were dealing with - for example: doctor, nurse, receptionist, billing staff, etc. Just describe them in your own words.`;
-    } else if (field.includes("impact")) {
-      explanation = `I'm asking how this situation affected you. For example: did it cause pain, stress, financial burden, delayed treatment, or other consequences? Share what feels relevant to you.`;
-    } else {
-      explanation = `I understand you need clarification. If you're not sure how to answer or don't have this information, that's completely okay - just let me know and we can move on.`;
-    }
+    // User needs clarification - provide explanation from config
+    const fieldDef = field ? getFieldDefinition(field) : undefined;
+    const explanation = fieldDef?.explanation ||
+      `I understand you need clarification. If you're not sure how to answer or don't have this information, that's completely okay - just let me know and we can move on.`;
 
     return {
       messages: [...state.messages, new AIMessage(explanation)],
@@ -913,26 +1209,36 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
   }
   
   const lastUserMessage = messages
-    .filter((m) => m._getType?.() === 'human' || m.constructor.name === 'HumanMessage')
+    .filter((m: any) => m._getType?.() === 'human' || m.constructor.name === 'HumanMessage')
     .pop()
     ?.content?.toString() || "";
   
   const lastAgentMessage = messages
-    .filter((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage')
+    .filter((m: any) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage')
     .pop()
     ?.content?.toString() || "";
 
   // Fast path: Handle simple yes/no confirmations to avoid re-asking the same question
-  const confirmQuestionPattern = /(just to confirm|is this (?:correct|accurate)|please confirm|does this look right|is that (?:correct|accurate))/i;
-  const affirmativePattern = /^(yes|yup|yeah|ya|y|correct|that's right|thats right|exactly|affirmative|sure|ok|okay)$/i;
-  const negativePattern = /^(no|nope|nah|n|not really|incorrect|that's wrong|thats wrong|not correct)$/i;
+  const confirmQuestionPattern = /(to confirm|is this (?:correct|accurate|the)|please confirm|does this look right|is that (?:correct|accurate|the)|is .* the (?:correct|exact|full)|if not,? please)/i;
   if (confirmQuestionPattern.test(lastAgentMessage)) {
     const trimmed = lastUserMessage.trim().toLowerCase();
-    if (affirmativePattern.test(trimmed)) {
-      console.log(`[validateExtractedData] ${Date.now() - t0}ms - Fast confirm: affirmative acknowledged`);
+    if (isAffirmative(trimmed)) {
+      console.log(`[validateExtractedData] ${Date.now() - t0}ms - Fast confirm: affirmative, advancing to next field`);
+      // Advance to next field by removing current field from missingFields
+      const currentField = missingFields?.[0];
+      if (currentField) {
+        const updatedFields = missingFields.slice(1);
+        const fieldAttempts = state.fieldAttempts || {};
+        const resetAttempts = { ...fieldAttempts };
+        delete resetAttempts[currentField];
+        return {
+          missingFields: updatedFields,
+          fieldAttempts: resetAttempts,
+        };
+      }
       return {};
     }
-    if (negativePattern.test(trimmed)) {
+    if (isNegative(trimmed)) {
       const followUp = `Thanks for clarifying. Could you share the correct details?`;
       console.log(`[validateExtractedData] ${Date.now() - t0}ms - Fast confirm: negative, asking for correction`);
       return {
@@ -960,9 +1266,11 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
   const fieldBeingAsked = missingFields?.[0] || '';
   
   // Validate DATE fields with rule-based checks
-  if (dateFields.some(f => fieldBeingAsked.includes(f)) || 
-      lastAgentMessage.toLowerCase().includes('date') || 
-      lastAgentMessage.toLowerCase().includes('when')) {
+  // IMPORTANT: Only apply date validation if we're actually asking for a date, NOT for billing amounts
+  const isAskingForDate = dateFields.some(f => fieldBeingAsked.includes(f)) || 
+                          (lastAgentMessage.toLowerCase().includes('when did') && !lastAgentMessage.toLowerCase().includes('amount') && !lastAgentMessage.toLowerCase().includes('charged'));
+  
+  if (isAskingForDate) {
     const dateValidation = validateDate(lastUserMessage);
     if (!dateValidation.isValid) {
       console.log(`[validateExtracted] ${Date.now() - t0}ms - Rule-based date validation FAILED`);
@@ -1153,16 +1461,96 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
     return {};
   }
 
+  // If the user answered a bundled question, try to capture multiple situation fields at once
+  const situationFields = ["event.date", "typeOfCare", "impact", "people.role", "event.location", "medication.name"];
+  const remainingSituation = missingFields.filter((f: string) => situationFields.includes(f));
+  const looksBundled = (currentQuestion || "").includes("•") || (currentQuestion || "").includes("could you share");
+
+  if (remainingSituation.length > 1 && looksBundled) {
+    const multiPrompt = `Extract the following fields from the user's response. Return null for anything not clearly provided.
+
+User response: "${userReply}"
+Fields (JSON keys):
+${remainingSituation.map(f => `- ${f}`).join('\n')}
+
+Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact": "...", "people.role": "...", "event.location": "..."}`;
+
+    try {
+      const multi = await llm.invoke(multiPrompt);
+      const multiContent = multi.content.toString().trim();
+      const jsonMatch = multiContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const extracted = JSON.parse(jsonMatch[0]);
+        const updatedComplaint: any = { ...complaint };
+        const collected: string[] = [];
+
+        if (remainingSituation.includes("event.date") && extracted["event.date"]) {
+          updatedComplaint.event = { ...(complaint.event || {}), date: extracted["event.date"] };
+          collected.push("event.date");
+        }
+
+        if (remainingSituation.includes("typeOfCare") && extracted["typeOfCare"]) {
+          const mapped = mapTypeOfCareInputToValue(extracted["typeOfCare"]) || extracted["typeOfCare"]; // normalize if possible
+          updatedComplaint.typeOfCare = mapped;
+          collected.push("typeOfCare");
+        }
+
+        if (remainingSituation.includes("impact") && extracted["impact"]) {
+          const mappedImpact = mapImpactInputToValue(extracted["impact"]) || extracted["impact"]; // normalize if possible
+          updatedComplaint.impact = [mappedImpact];
+          collected.push("impact");
+        }
+
+        if (remainingSituation.includes("people.role") && extracted["people.role"]) {
+          updatedComplaint.people = { ...(complaint.people || {}), role: extracted["people.role"] };
+          collected.push("people.role");
+        }
+
+        if (remainingSituation.includes("event.location") && extracted["event.location"]) {
+          updatedComplaint.event = { ...(complaint.event || {}), location: extracted["event.location"] };
+          collected.push("event.location");
+        }
+
+        if (remainingSituation.includes("medication.name") && extracted["medication.name"]) {
+          updatedComplaint.medication = { ...(complaint.medication || {}), name: extracted["medication.name"] };
+          collected.push("medication.name");
+        }
+
+        if (collected.length > 0) {
+          const remaining = missingFields.filter((f: string) => !collected.includes(f));
+          const fieldAttempts = state.fieldAttempts || {};
+          const resetAttempts = { ...fieldAttempts };
+          collected.forEach(f => delete resetAttempts[f]);
+          console.log(`[updateComplaint] Multi-field capture from bundled reply; collected: ${collected.join(', ')}, remaining: [${remaining.join(', ')}]`);
+          return {
+            complaint: updatedComplaint,
+            missingFields: remaining,
+            fieldAttempts: resetAttempts,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`[updateComplaint] Multi-field extraction failed, continuing with single-field path`, err);
+    }
+  }
+
   // If the current question is a confirmation, handle yes/no succinctly
-  const confirmQuestionPattern = /(just to confirm|is this (?:correct|accurate)|please confirm|does this look right|is that (?:correct|accurate))/i;
+  const confirmQuestionPattern = /(to confirm|is this (?:correct|accurate|the)|please confirm|does this look right|is that (?:correct|accurate|the)|is .* the (?:correct|exact|full)|if not,? please)/i;
   const affirmativePattern = /^(yes|yup|yeah|ya|y|correct|that's right|thats right|exactly|affirmative|sure|ok|okay)$/i;
   const negativePattern = /^(no|nope|nah|n|not really|incorrect|that's wrong|thats wrong|not correct)$/i;
   if (currentQuestion && confirmQuestionPattern.test(currentQuestion)) {
     const trimmed = userReply.trim().toLowerCase();
     if (affirmativePattern.test(trimmed)) {
-      console.log(`[updateComplaint] Confirmation acknowledged (affirmative)`);
-      // No changes needed; proceed without overwriting collected values
-      return {};
+      console.log(`[updateComplaint] Confirmation acknowledged (affirmative) - advancing to next field`);
+      // User confirmed, remove this field and move on
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      return {
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
     }
     if (negativePattern.test(trimmed)) {
       const followUp = `Thanks for letting me know. Could you share the correct ${fieldToUpdate.includes('event.date') ? 'date' : 'details'}?`;
@@ -1196,6 +1584,61 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
       console.log(`[updateComplaint] ✗ No mapping found, will pass raw input to LLM`);
     }
   }
+
+  // Handle "no one" or "can't remember" responses for people.role to avoid repeat asks
+  if (fieldToUpdate === "people.role") {
+    const nonePatterns = /(no one|nobody|none|didn't speak|did not speak|no staff|no person|nope|nil)/i;
+    const unsurePatterns = /(don'?t remember|do not remember|can'?t remember|can'?t recall|not sure|unsure|don't know|do not know|idk)/i;
+    if (nonePatterns.test(userReply)) {
+      const updatedComplaint = { ...complaint, people: { ...(complaint.people || {}), role: "none" } };
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      console.log(`[updateComplaint] Captured 'no one' for people.role; remaining fields: [${updatedMissingFields.join(', ')}]`);
+      return {
+        complaint: updatedComplaint,
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
+    }
+    if (unsurePatterns.test(userReply)) {
+      const updatedComplaint = { ...complaint, people: { ...(complaint.people || {}), role: "unsure" } };
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      console.log(`[updateComplaint] Captured 'unsure' for people.role; remaining fields: [${updatedMissingFields.join(', ')}]`);
+      return {
+        complaint: updatedComplaint,
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
+    }
+  }
+  
+  // Handle billing.amount extraction - capture charged vs correct amounts
+  if (fieldToUpdate === "billing.amount") {
+    // Pattern: "charged X when/it's/should be Y" or "incorrect X correct Y"
+    const amountPattern = /(?:charged|was|amount|incorrect|wrong)?\s*[\$]?(\d+[\.,]?\d*)\s*(?:when|but|should be|correct|supposed to be|is|ought to be)\s*[\$]?(\d+[\.,]?\d*)/i;
+    const match = userReply.match(amountPattern);
+    
+    if (match && match[1] && match[2]) {
+      const chargedAmount = match[1].replace(/[\.,]/g, '');
+      const correctAmount = match[2].replace(/[\.,]/g, '');
+      const updatedComplaint = { ...complaint, billing: { ...(complaint.billing || {}), amount: `${chargedAmount} vs ${correctAmount}` } };
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      console.log(`[updateComplaint] Captured billing amounts: charged ${chargedAmount}, correct ${correctAmount}`);
+      return {
+        complaint: updatedComplaint,
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
+    }
+  }
   
   // NEW: Handle boolean fields for contact details
   if (fieldToUpdate === "contactDetails.isPatient" || fieldToUpdate === "contactDetails.wantsContact") {
@@ -1204,11 +1647,35 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
     const trimmed = userReply.trim().toLowerCase();
     
     if (yesPattern.test(trimmed)) {
-      processedReply = "true";
-      console.log(`[updateComplaint] Normalized boolean to: true`);
+      // User said yes - update complaint and mark field as collected
+      const fieldName = fieldToUpdate.split('.')[1] as any;
+      const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: true };
+      const updatedComplaint = { ...complaint, contactDetails: updatedContactDetails };
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      console.log(`[updateComplaint] Set ${fieldToUpdate} = true`);
+      return {
+        complaint: updatedComplaint,
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
     } else if (noPattern.test(trimmed)) {
-      processedReply = "false";
-      console.log(`[updateComplaint] Normalized boolean to: false`);
+      // User said no - update complaint and mark field as collected
+      const fieldName = fieldToUpdate.split('.')[1] as any;
+      const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: false };
+      const updatedComplaint = { ...complaint, contactDetails: updatedContactDetails };
+      const updatedMissingFields = missingFields.slice(1);
+      const fieldAttempts = state.fieldAttempts || {};
+      const resetAttempts = { ...fieldAttempts };
+      delete resetAttempts[fieldToUpdate];
+      console.log(`[updateComplaint] Set ${fieldToUpdate} = false`);
+      return {
+        complaint: updatedComplaint,
+        missingFields: updatedMissingFields,
+        fieldAttempts: resetAttempts,
+      };
     }
   }
   
@@ -1225,6 +1692,7 @@ Extract these fields (mark as null if not found):
 - email: Email address
 - contactNo: Phone number
 - isPatient: Are they the patient? (true/false, null if not mentioned)
+@@- wantsContact: Do they want to be contacted? (true/false, null if not mentioned)
 - wantsContact: Do they want to be contacted? (true/false, null if not mentioned)
 
 Respond ONLY with JSON:
@@ -1251,29 +1719,41 @@ Respond ONLY with JSON:
           updatedComplaint.contactDetails = {};
         }
         
+        let contactDescriptionAppend = '(Contact info: ';
+        const contactParts: string[] = [];
+        
         if (extracted.name && extracted.name !== "null") {
           updatedComplaint.contactDetails.name = extracted.name;
+          contactParts.push(`Name: ${extracted.name}`);
         }
         if (extracted.email && extracted.email !== "null") {
           updatedComplaint.contactDetails.email = extracted.email;
+          contactParts.push(`Email: ${extracted.email}`);
         }
         if (extracted.contactNo && extracted.contactNo !== "null") {
           updatedComplaint.contactDetails.contactNo = extracted.contactNo;
+          contactParts.push(`Phone: ${extracted.contactNo}`);
         }
         if (extracted.isPatient !== null && extracted.isPatient !== "null") {
           updatedComplaint.contactDetails.isPatient = extracted.isPatient;
+          contactParts.push(`Patient: ${extracted.isPatient ? 'Yes' : 'No'}`);
         }
-        if (extracted.wantsContact !== null && extracted.wantsContact !== "null") {
-          updatedComplaint.contactDetails.wantsContact = extracted.wantsContact;
+        
+        // ENHANCEMENT: Append contact info to description
+        if (contactParts.length > 0) {
+          contactDescriptionAppend += contactParts.join(', ') + ')';
+          if (updatedComplaint.description) {
+            updatedComplaint.description = updatedComplaint.description + ' ' + contactDescriptionAppend;
+            console.log(`[updateComplaint] Updated description with contact info`);
+          }
         }
         
         // Remove all collected contact fields from missingFields
-        const remainingFields = missingFields.filter(f => {
+        const remainingFields = missingFields.filter((f: string) => {
           if (f === 'contactDetails.name' && extracted.name && extracted.name !== "null") return false;
           if (f === 'contactDetails.email' && extracted.email && extracted.email !== "null") return false;
           if (f === 'contactDetails.contactNo' && extracted.contactNo && extracted.contactNo !== "null") return false;
           if (f === 'contactDetails.isPatient' && extracted.isPatient !== null && extracted.isPatient !== "null") return false;
-          if (f === 'contactDetails.wantsContact' && extracted.wantsContact !== null && extracted.wantsContact !== "null") return false;
           return true;
         });
         
@@ -1328,6 +1808,53 @@ Respond ONLY with the extracted value, nothing else.`;
     }
   }
 
+  // ENHANCEMENT: Update description field with extracted information
+  // This allows the description to evolve throughout the conversation, showing hospital staff
+  // what information was collected and when
+  if (extractedValue !== "UNKNOWN" && extractedValue && extractedValue.length > 0) {
+    let descriptionAppend = '';
+    
+    // Generate readable description updates based on field type
+    switch(fieldToUpdate) {
+      case 'event.date':
+        descriptionAppend = `(When: ${extractedValue})`;
+        break;
+      case 'event.location':
+        descriptionAppend = `(Location: ${extractedValue})`;
+        break;
+      case 'typeOfCare':
+        descriptionAppend = `(Service: ${extractedValue})`;
+        break;
+      case 'impact':
+        const impactValue = Array.isArray(extractedValue) ? extractedValue[0] : extractedValue;
+        descriptionAppend = `(Impact: ${impactValue})`;
+        break;
+      case 'people.role':
+        descriptionAppend = `(Staff involved: ${extractedValue})`;
+        break;
+      case 'medication.name':
+        descriptionAppend = `(Medication: ${extractedValue})`;
+        break;
+      case 'billing.amount':
+        descriptionAppend = `(Amount: ${extractedValue})`;
+        break;
+      case 'billing.insuranceStatus':
+        descriptionAppend = `(Insurance: ${extractedValue})`;
+        break;
+      default:
+        // For any other field, append it with the field name
+        if (!fieldToUpdate.startsWith('contactDetails')) {
+          descriptionAppend = `(${fieldToUpdate}: ${extractedValue})`;
+        }
+    }
+    
+    // Append to existing description if we have something to add
+    if (descriptionAppend && updatedComplaint.description) {
+      updatedComplaint.description = updatedComplaint.description + ' ' + descriptionAppend;
+      console.log(`[updateComplaint] Updated description with: ${descriptionAppend}`);
+    }
+  }
+
   // Remove the field we just collected from missingFields
   const updatedMissingFields = missingFields.slice(1);
   console.log(`[updateComplaint] Field collected, remaining: [${updatedMissingFields.join(', ')}]`);
@@ -1344,29 +1871,129 @@ Respond ONLY with the extracted value, nothing else.`;
 }
 
 /**
+ * Determine urgency level based on complaint characteristics
+ */
+function determineUrgency(complaint: any): string {
+  let urgencyScore = 0;
+
+  // HIGH urgency indicators
+  // Safety-related complaints (CLINICAL domain, especially SAFETY subcategory)
+  if (complaint.domain === 'CLINICAL' && complaint.subcategory === 'SAFETY') {
+    urgencyScore = 10;
+  }
+  
+  // Severe impacts (Physical symptoms, Safety risk)
+  if (complaint.impact && Array.isArray(complaint.impact)) {
+    const criticalImpacts = ['PHYSICAL', 'SAFETY_RISK', 'DELAY_IN_CARE'];
+    if (complaint.impact.some((i: string) => criticalImpacts.includes(i.toUpperCase()))) {
+      urgencyScore = Math.max(urgencyScore, 8);
+    }
+  }
+
+  // Emergency or recent incident (within last 24-48 hours)
+  if (complaint.typeOfCare === 'EMERGENCY') {
+    urgencyScore = Math.max(urgencyScore, 8);
+  }
+
+  // MEDIUM urgency indicators
+  // Clinical complaints (medication, diagnosis, procedure issues)
+  if (complaint.domain === 'CLINICAL') {
+    urgencyScore = Math.max(urgencyScore, 5);
+  }
+
+  // Financial/Billing complaints with significant amounts
+  if (complaint.subcategory === 'BILLING' && complaint.billing?.amount) {
+    const amount = parseFloat(complaint.billing.amount.replace(/[^0-9.]/g, ''));
+    if (!isNaN(amount) && amount > 1000) {
+      urgencyScore = Math.max(urgencyScore, 6);
+    } else {
+      urgencyScore = Math.max(urgencyScore, 4);
+    }
+  }
+
+  // Wait time complaints
+  if (complaint.subcategory === 'WAIT_TIME') {
+    urgencyScore = Math.max(urgencyScore, 5);
+  }
+
+  // Emotional impact
+  if (complaint.impact && Array.isArray(complaint.impact)) {
+    if (complaint.impact.some((i: string) => i.toUpperCase() === 'EMOTIONAL')) {
+      urgencyScore = Math.max(urgencyScore, 4);
+    }
+  }
+
+  // LOW urgency indicators (default if no high/medium factors)
+  if (urgencyScore === 0) {
+    urgencyScore = 2;
+  }
+
+  // Map score to urgency level
+  if (urgencyScore >= 8) {
+    return 'HIGH';
+  } else if (urgencyScore >= 5) {
+    return 'MEDIUM';
+  } else {
+    return 'LOW';
+  }
+}
+
+/**
  * Node 5: generateFinalResponse
  * LLM node that generates patient-facing acknowledgement
  */
 export async function generateFinalResponse(state: GraphState): Promise<Partial<GraphState>> {
   const { complaint } = state;
 
-  const responsePrompt = `You are a compassionate hospital representative. Generate a brief, empathetic final response acknowledging the patient's complaint.
+  // SAFEGUARD: If user wants contact but we don't have contact details, don't generate final message yet
+  // This ensures contact details are collected before ending the conversation
+  const wantsContact = (complaint.contactDetails?.wantsContact as any) === true || (complaint.contactDetails?.wantsContact as any) === 'true';
+  
+  if (wantsContact) {
+    const contactFields = ['name', 'email', 'contactNo'];
+    const missingContactFields = contactFields.filter(field => {
+      const value = (complaint.contactDetails as any)?.[field];
+      return !value || value === 'unknown';
+    });
+    
+    if (missingContactFields.length > 0) {
+      console.log(`[generateFinalResponse] User wants contact but missing fields: [${missingContactFields.join(', ')}]. Returning empty to trigger contact detail collection.`);
+      // Don't generate final message yet - the conversation should loop back to askQuestion
+      // This is a safety measure in case determineMissingFields didn't add contact fields
+      return {};
+    }
+  }
+
+  // Determine urgency level based on complaint characteristics
+  const urgency = determineUrgency(complaint);
+  
+  let finalMessage = '';
+  
+  if (!wantsContact) {
+    // User doesn't want to be contacted - close politely and thank them
+    finalMessage = `Thank you for sharing your complaint with us. We sincerely apologize for the inconvenience you experienced. Your feedback is important and will be reviewed by our team to help us improve our services. We appreciate your time.`;
+  } else {
+    // User wants contact - acknowledge and confirm next steps
+    const responsePrompt = `You are a compassionate hospital representative. Generate a brief, empathetic final response acknowledging the patient's complaint and confirming we'll follow up.
 
 Complaint Details:
 - Type: ${complaint.subcategory}
 - Description: ${complaint.description}
+- Contact: ${complaint.contactDetails?.name ? `Name: ${complaint.contactDetails.name}, ` : ''}${complaint.contactDetails?.email ? `Email: ${complaint.contactDetails.email}, ` : ''}${complaint.contactDetails?.contactNo ? `Phone: ${complaint.contactDetails.contactNo}` : ''}
 
 Requirements:
 - Acknowledge their concern
 - Assure them it will be reviewed
+- Confirm we will follow up with them
 - State next steps (human review/investigation)
 - Be warm but professional
 - Keep it to 2-3 sentences
 
 Generate the response:`;
 
-  const response = await llm.invoke(responsePrompt);
-  const finalMessage = response.content.toString().trim();
+    const response = await llm.invoke(responsePrompt);
+    finalMessage = response.content.toString().trim();
+  }
 
   // Add to message history
   const updatedMessages = [...state.messages, new AIMessage(finalMessage)];
@@ -1376,6 +2003,7 @@ Generate the response:`;
     isComplete: true,
     complaint: {
       ...complaint,
+      urgencyLevel: urgency as any,
       needsHumanInvestigation: true,
     },
   };

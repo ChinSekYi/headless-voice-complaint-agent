@@ -3,6 +3,7 @@ import "dotenv/config";
 import { createComplaintGraph, createContinuationGraph, type GraphState } from "./agent/index.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
+import { initStorage, saveComplaintRecord } from "./storage.js";
 
 const app = express();
 app.use(express.json());
@@ -31,7 +32,7 @@ app.post("/voice", async (req, res) => {
       sessionId = uuidv4();
     }
 
-    let state = sessions.get(sessionId);
+    let state: GraphState | undefined = sessions.get(sessionId);
     
     if (!state) {
       // New session - start from beginning
@@ -42,6 +43,7 @@ app.post("/voice", async (req, res) => {
         currentQuestion: undefined,
         isComplete: false,
         needsMoreInfo: false,
+        fieldAttempts: {},
         sessionId,
       };
       
@@ -50,7 +52,8 @@ app.post("/voice", async (req, res) => {
       sessions.set(sessionId, result);
       
       const totalMs = Date.now() - t0;
-      const lastMessage = result.messages[result.messages.length - 1];
+      const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
+      const lastMessage = lastAI || result.messages[result.messages.length - 1];
       
       console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
@@ -82,12 +85,22 @@ app.post("/voice", async (req, res) => {
       sessions.set(sessionId, result);
       
       const totalMs = Date.now() - t0;
-      const lastMessage = result.messages[result.messages.length - 1];
+      const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
+      const lastMessage = lastAI || result.messages[result.messages.length - 1];
       
       console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
-      // Clean up completed sessions
+      // Persist completed complaint and clean up session
       if (result.isComplete) {
+        try {
+          await saveComplaintRecord({
+            sessionId,
+            complaint: result.complaint,
+            submissionTimeISO: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn("Failed to persist complaint:", err);
+        }
         sessions.delete(sessionId);
       }
       
@@ -111,6 +124,8 @@ app.post("/voice", async (req, res) => {
 
 app.listen(3000, () => {
   console.log("Server running at http://localhost:3000");
+  // Initialize storage directory and file
+  initStorage().catch(err => console.warn("Storage init failed:", err));
   
   // Validate required environment variables
   const requiredEnvVars = [

@@ -98,7 +98,6 @@ export interface Complaint {
     name?: string;
     email?: string;
     contactNo?: string;
-    address?: string;
     isPatient?: boolean;
     wantsContact?: boolean;
   };
