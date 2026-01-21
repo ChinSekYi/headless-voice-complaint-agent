@@ -1,2 +1,2 @@
 start:
-	npx ts-node src/server.ts
+	npx tsx src/server.ts

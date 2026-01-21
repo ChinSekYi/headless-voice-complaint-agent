@@ -23,6 +23,9 @@
   "homepage": "https://github.com/ChinSekYi/hospital-complaints-handler#readme",
   "dependencies": {
     "@azure/openai": "^2.0.0",
+    "@langchain/core": "^1.1.16",
+    "@langchain/langgraph": "^1.1.1",
+    "@langchain/openai": "^1.2.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "openai": "^6.16.0"
@@ -30,8 +33,10 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.9",
+    "@types/uuid": "^10.0.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "uuid": "^13.0.0"
   }
 }
