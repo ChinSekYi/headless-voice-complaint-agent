@@ -57,11 +57,54 @@ async function classifyWithLLM(text: string): Promise<{ type: ComplaintType; llm
   }
 }
 
-function keywordClassify(text: string): ComplaintType {
+function keywordClassify(text: string): ComplaintType { // Fallback path if LLM fails
   const t = text.toLowerCase();
   if (/\bappointment|schedule|reschedule|cancel|doctor|wait\b/.test(t)) return "APPOINTMENT";
   if (/\bbill|billing|charge|payment|invoice|insurance\b/.test(t)) return "BILLING";
   return "OTHER";
+}
+
+async function generateResponseWithLLM(text: string, type: ComplaintType): Promise<string> {
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  const apiKey = process.env.AZURE_OPENAI_API_KEY;
+  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
+
+  // Fallback to template if LLM not configured
+  if (!endpoint || !apiKey || !deployment) {
+    return RESPONSE_TEMPLATES[type];
+  }
+
+  const client = new AzureOpenAI({
+    apiKey,
+    apiVersion: "2024-02-15-preview",
+    baseURL: `${endpoint}/openai/deployments/${deployment}`
+  });
+
+  const RESPONSE_PROMPT = `You are a compassionate hospital representative. Generate an empathetic, professional response to this ${type} complaint. 
+  
+Requirements:
+- Be brief (2-3 sentences max)
+- Acknowledge the specific issue
+- State clear next steps
+- Use a warm, professional tone
+- Do NOT make promises you can't keep`;
+
+  try {
+    const response = await client.chat.completions.create({
+      model: deployment,
+      messages: [
+        { role: "system", content: RESPONSE_PROMPT },
+        { role: "user", content: text }
+      ],
+      temperature: 0.7,
+      max_tokens: 150
+    });
+
+    return response.choices?.[0]?.message?.content?.trim() ?? RESPONSE_TEMPLATES[type];
+  } catch (error) {
+    console.error("LLM response generation error:", error);
+    return RESPONSE_TEMPLATES[type];
+  }
 }
 
 export async function handleComplaint(text: string): Promise<AgentResult> {
@@ -72,7 +115,7 @@ export async function handleComplaint(text: string): Promise<AgentResult> {
 
   // Respond
   decisionPath.push("RESPOND");
-  const responseText = `Thank you for your feedback: "${text}". ${RESPONSE_TEMPLATES[type]}`;
+  const responseText = await generateResponseWithLLM(text, type);
 
   return {
     complaintType: type,
@@ -82,3 +125,4 @@ export async function handleComplaint(text: string): Promise<AgentResult> {
     usedLLM
   };
 }
+
