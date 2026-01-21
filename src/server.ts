@@ -41,41 +41,50 @@ app.post("/voice", async (req, res) => {
         missingFields: [],
         currentQuestion: undefined,
         isComplete: false,
+        needsMoreInfo: false,
         sessionId,
       };
       
-      // Run main graph (classify → determineMissing → ask/final)
+      // Run main graph (validate → classify → determineMissing → ask/final)
       const result = await graph.invoke(state) as GraphState;
       sessions.set(sessionId, result);
       
       const totalMs = Date.now() - t0;
       const lastMessage = result.messages[result.messages.length - 1];
       
-      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} missingFields=${result.missingFields.length}`);
+      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
       return res.json({
         sessionId,
         textResponse: lastMessage?.content?.toString() || 'No response',
         complaintType: result.complaint.subcategory,
         isComplete: result.isComplete,
+        needsMoreInfo: result.needsMoreInfo,
         audioBase64: null,
         metrics: { totalMs },
+        complaint: result.complaint,
+        missingFields: result.missingFields,
       });
     } else {
       // Existing session - user is replying to a question
       state.messages.push(new HumanMessage(text));
+      
+      console.log(`[DEBUG] Before continuation - subcategory: ${state.complaint.subcategory}, needsMoreInfo: ${state.needsMoreInfo}, missingFields: ${state.missingFields.length}`);
       
       // Run continuation graph (update → determineMissing → ask/final)
       const result = await continuationGraph.invoke(state, { 
         recursionLimit: 10,
       }) as GraphState;
       
+      console.log(`[DEBUG] After continuation - subcategory: ${result.complaint.subcategory}, needsMoreInfo: ${result.needsMoreInfo}, missingFields: ${result.missingFields.length}, messageCount: ${result.messages.length}`);
+      console.log(`[DEBUG] Last message: ${result.messages[result.messages.length - 1]?.content?.toString().substring(0, 50)}`);
+      
       sessions.set(sessionId, result);
       
       const totalMs = Date.now() - t0;
       const lastMessage = result.messages[result.messages.length - 1];
       
-      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} missingFields=${result.missingFields.length}`);
+      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
       // Clean up completed sessions
       if (result.isComplete) {
@@ -87,8 +96,11 @@ app.post("/voice", async (req, res) => {
         textResponse: lastMessage?.content?.toString() || 'No response',
         complaintType: result.complaint.subcategory,
         isComplete: result.isComplete,
+        needsMoreInfo: result.needsMoreInfo,
         audioBase64: null,
         metrics: { totalMs },
+        complaint: result.complaint,
+        missingFields: result.missingFields,
       });
     }
   } catch (error) {

@@ -38,6 +38,12 @@ export const GraphStateAnnotation = Annotation.Root({
     default: () => false,
   }),
   
+  /** Whether agent needs more info to proceed with classification */
+  needsMoreInfo: Annotation<boolean>({
+    reducer: (prev, next) => next,
+    default: () => false,
+  }),
+  
   /** Session ID for tracking multi-turn conversations */
   sessionId: Annotation<string | undefined>({
     reducer: (prev, next) => next ?? prev,
