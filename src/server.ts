@@ -99,4 +99,17 @@ app.post("/voice", async (req, res) => {
 
 app.listen(3000, () => {
   console.log("Server running at http://localhost:3000");
+  
+  // Validate required environment variables
+  const requiredEnvVars = [
+    'AZURE_OPENAI_API_KEY',
+    'AZURE_OPENAI_ENDPOINT',
+    'AZURE_OPENAI_DEPLOYMENT'
+  ];
+  
+  const missing = requiredEnvVars.filter(v => !process.env[v]);
+  if (missing.length > 0) {
+    console.warn(`⚠️  Missing environment variables: ${missing.join(', ')}`);
+    console.warn('   LLM features will not work. Check your .env file.');
+  }
 });
