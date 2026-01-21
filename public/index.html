@@ -573,9 +573,11 @@
         // Remove loading message
         loadingMsg.remove();
 
-        // Add assistant response
+        // Add assistant response with proper line breaks
         const responseText = data.textResponse || 'No response received.';
-        let fullMessage = responseText;
+        // Convert newlines to <br> tags for proper HTML display
+        const formattedResponse = responseText.replace(/\n/g, '<br>');
+        let fullMessage = formattedResponse;
 
         // Add metadata
         if (data.complaintType) {
@@ -727,6 +729,36 @@
       
       if (complaint.urgencyLevel) {
         collectedFields.push({ label: 'Urgency Level', value: formatFieldName(complaint.urgencyLevel) });
+      }
+
+      // Contact details section
+      if (complaint.contactDetails) {
+        const contactFields = [];
+        
+        if (complaint.contactDetails.name) {
+          contactFields.push({ label: 'Contact Name', value: complaint.contactDetails.name });
+        }
+        if (complaint.contactDetails.email) {
+          contactFields.push({ label: 'Contact Email', value: complaint.contactDetails.email });
+        }
+        if (complaint.contactDetails.contactNo) {
+          contactFields.push({ label: 'Contact Phone', value: complaint.contactDetails.contactNo });
+        }
+        if (complaint.contactDetails.isPatient !== undefined) {
+          const patientStatus = complaint.contactDetails.isPatient ? 'Patient' : 'Not Patient';
+          contactFields.push({ label: 'Complainant Type', value: patientStatus });
+        }
+        if (complaint.contactDetails.wantsContact !== undefined) {
+          const contactPref = complaint.contactDetails.wantsContact ? 'Wants Contact' : 'Prefers No Contact';
+          contactFields.push({ label: 'Follow-up Preference', value: contactPref });
+        }
+        if (complaint.contactDetails.address) {
+          contactFields.push({ label: 'Contact Address', value: complaint.contactDetails.address });
+        }
+
+        if (contactFields.length > 0) {
+          collectedFields.push(...contactFields);
+        }
       }
 
       if (collectedFields.length > 0) {
