@@ -940,9 +940,22 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
     };
   }
   
-  // NEW: For impact, provide dropdown-style options to reduce ambiguity
+  // NEW: For impact, ask conversational question with contextual concerns
   if (fieldToAsk === "impact") {
-    const question = `I'm sorry this happened. How did this affect you?\n\n${IMPACT_OPTIONS.join('\n')}\n\nYou can reply with the number, a few words, or skip. If you don't know, just say "don't know" and we'll move on.`;
+    let contextualConcerns = "like stress, delays in care, or affecting your daily activities";
+    
+    // Tailor concerns based on complaint type
+    if (complaint.subcategory === 'WAIT_TIME') {
+      contextualConcerns = "like extra stress, time lost, or affecting your plans";
+    } else if (complaint.subcategory === 'BILLING') {
+      contextualConcerns = "like financial strain, stress, or affecting your other medical care";
+    } else if (complaint.subcategory === 'MEDICATION') {
+      contextualConcerns = "like health impacts, side effects, or worry about your treatment";
+    } else if (complaint.subcategory === 'FACILITIES') {
+      contextualConcerns = "like discomfort, sleep disruption, or affecting your recovery";
+    }
+    
+    const question = `How did this affect you? (for example, ${contextualConcerns})`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -1266,9 +1279,9 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
   const fieldBeingAsked = missingFields?.[0] || '';
   
   // Validate DATE fields with rule-based checks
-  // IMPORTANT: Only apply date validation if we're actually asking for a date, NOT for billing amounts
-  const isAskingForDate = dateFields.some(f => fieldBeingAsked.includes(f)) || 
-                          (lastAgentMessage.toLowerCase().includes('when did') && !lastAgentMessage.toLowerCase().includes('amount') && !lastAgentMessage.toLowerCase().includes('charged'));
+  // IMPORTANT: Only apply date validation if we're specifically asking for a date field
+  // NOT just if the message contains "when did" (to avoid validating duration as a date)
+  const isAskingForDate = dateFields.some(f => fieldBeingAsked.includes(f));
   
   if (isAskingForDate) {
     const dateValidation = validateDate(lastUserMessage);
@@ -1318,6 +1331,72 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
     console.log(`[validateExtracted] Field: "${fieldBeingAsked}", Last msg contains 'affect': ${lastAgentMessage.toLowerCase().includes('affect')}`);
     return {};
   }
+
+  // NEW: Handle Yes/No fields (wantsContact, isPatient) with simple affirmative/negative matching
+  const yesNoFields = ['contactDetails.wantsContact', 'contactDetails.isPatient'];
+  if (yesNoFields.some(f => fieldBeingAsked.includes(f))) {
+    const trimmed = lastUserMessage.trim().toLowerCase();
+    const fieldAttempts = state.fieldAttempts || {};
+    const currentAttempts = fieldAttempts[fieldBeingAsked] || 0;
+
+    // Check for clear yes/no answer
+    if (isAffirmative(trimmed)) {
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - ✓ Yes/No field (${fieldBeingAsked}): AFFIRMATIVE detected`);
+      return {};
+    }
+    
+    if (isNegative(trimmed)) {
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - ✓ Yes/No field (${fieldBeingAsked}): NEGATIVE detected`);
+      return {};
+    }
+
+    // If neither yes nor no, and this is the first attempt, ask for clarification
+    if (currentAttempts === 0) {
+      const fieldName = fieldBeingAsked.includes('wantsContact') ? 'contact preference' : 'patient status';
+      const clarification = `Sorry, I didn't catch that. For your ${fieldName}, could you please say Yes or No?`;
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - Yes/No field needs clarification (attempt 1)`);
+      return {
+        needsMoreInfo: true,
+        currentQuestion: clarification,
+        messages: [...state.messages, new AIMessage(clarification)],
+        missingFields: [fieldBeingAsked],
+      };
+    }
+
+    // Second attempt: if still no clear yes/no, assume they don't want to engage further
+    if (currentAttempts >= 1) {
+      // For wantsContact: default to false and move on
+      if (fieldBeingAsked.includes('wantsContact')) {
+        console.log(`[validateExtracted] ${Date.now() - t0}ms - No clear Yes/No for wantsContact after 2 attempts, defaulting to false`);
+        const updatedComplaint = { ...state.complaint } as any;
+        if (!updatedComplaint.contactDetails) {
+          updatedComplaint.contactDetails = {};
+        }
+        updatedComplaint.contactDetails.wantsContact = false;
+        
+        return {
+          complaint: updatedComplaint,
+          missingFields: (state.missingFields || []).slice(1),
+        };
+      }
+      
+      // For isPatient: default to true (assume they are the patient) and move on
+      if (fieldBeingAsked.includes('isPatient')) {
+        console.log(`[validateExtracted] ${Date.now() - t0}ms - No clear Yes/No for isPatient after 2 attempts, defaulting to true`);
+        const updatedComplaint = { ...state.complaint } as any;
+        if (!updatedComplaint.contactDetails) {
+          updatedComplaint.contactDetails = {};
+        }
+        updatedComplaint.contactDetails.isPatient = true;
+        
+        return {
+          complaint: updatedComplaint,
+          missingFields: (state.missingFields || []).slice(1),
+        };
+      }
+    }
+  }
+
 
   // STRATEGY 2: LLM-Based Validation (Flexible) - Fallback for complex cases
 
@@ -1642,11 +1721,11 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
   
   // NEW: Handle boolean fields for contact details
   if (fieldToUpdate === "contactDetails.isPatient" || fieldToUpdate === "contactDetails.wantsContact") {
-    const yesPattern = /^(yes|yup|yeah|ya|y|true|i am|i'm the patient|me|myself)$/i;
-    const noPattern = /^(no|nope|nah|n|false|not me|someone else|on behalf)$/i;
+    const yesPattern = /(yes|yup|yeah|ya|y|true|i am|i'm the patient|me|myself|would like|want to|please contact)/i;
+    const noPattern = /(no|nope|nah|n|false|not me|someone else|on behalf|don't|do not|would not|don't want)/i;
     const trimmed = userReply.trim().toLowerCase();
     
-    if (yesPattern.test(trimmed)) {
+    if (yesPattern.test(trimmed) && !noPattern.test(trimmed)) {
       // User said yes - update complaint and mark field as collected
       const fieldName = fieldToUpdate.split('.')[1] as any;
       const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: true };
@@ -1661,8 +1740,8 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
         missingFields: updatedMissingFields,
         fieldAttempts: resetAttempts,
       };
-    } else if (noPattern.test(trimmed)) {
-      // User said no - update complaint and mark field as collected
+    } else if (noPattern.test(trimmed) || !yesPattern.test(trimmed)) {
+      // User said no or unclear - update complaint and mark field as collected
       const fieldName = fieldToUpdate.split('.')[1] as any;
       const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: false };
       const updatedComplaint = { ...complaint, contactDetails: updatedContactDetails };
