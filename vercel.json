@@ -1,15 +1,11 @@
 {
   "version": 2,
-  "buildCommand": "npm install && npx tsc --noEmit",
-  "env": {
-    "npm_config_legacy_peer_deps": "true"
-  },
   "builds": [
     {
       "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["src/**", "public/**", "package.json", "tsconfig.json"]
+        "includeFiles": ["src/**", "public/**", "data/**"]
       }
     }
   ],
@@ -19,4 +15,4 @@
       "dest": "/api/index.ts"
     }
   ]
-}
+
