@@ -760,6 +760,12 @@ Only include fields that are needed. Omit fields not mentioned.`;
     // Generic filter: Never re-ask fields that have been attempted or already have values
     const fieldAttempts = state.fieldAttempts || {};
     const filteredFields = Array.isArray(fieldsToProcess) ? fieldsToProcess.filter((f: string) => {
+      // Rule 0: ABSOLUTE MAX - if attempted 3+ times, NEVER ask again (safety against infinite loops)
+      if (fieldAttempts[f] && fieldAttempts[f] >= 3) {
+        console.log(`[determineMissingFields] ⛔ HARD LIMIT: ${f} attempted ${fieldAttempts[f]} times, permanently skipping`);
+        return false;
+      }
+      
       // Rule 1: If we've already attempted this field, don't ask again (field has been asked before)
       if (fieldAttempts[f] && fieldAttempts[f] > 0) {
         console.log(`[determineMissingFields] Filtering out ${f} - already attempted ${fieldAttempts[f]} time(s)`);
@@ -773,17 +779,25 @@ Only include fields that are needed. Omit fields not mentioned.`;
         if (!obj) return false;
         if (sub) {
           const val = obj[sub];
-          return val !== undefined && val !== null && (val as any) !== 'unknown' && 
+          const has = val !== undefined && val !== null && (val as any) !== 'unknown' && 
                  !(Array.isArray(val) && (val[0] as any) === 'unknown');
+          if (has) {
+            console.log(`[determineMissingFields] Field ${fieldPath} has value: "${String(val).substring(0, 30)}"`);
+          }
+          return has;
         } else {
           const val = obj;
-          return val !== undefined && val !== null && (val as any) !== 'unknown' && 
+          const has = val !== undefined && val !== null && (val as any) !== 'unknown' && 
                  !(Array.isArray(val) && (val[0] as any) === 'unknown');
+          if (has) {
+            console.log(`[determineMissingFields] Field ${fieldPath} has value: "${String(val).substring(0, 30)}"`);
+          }
+          return has;
         }
       };
 
       if (hasValue(f)) {
-        console.log(`[determineMissingFields] Filtering out ${f} - already has value in complaint`);
+        console.log(`[determineMissingFields] ✓ Filtering out ${f} - already has value in complaint`);
         return false;
       }
 
@@ -830,6 +844,18 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
   
   const fieldAttempts: Record<string, number> = state.fieldAttempts || {};
   const currentAttempts = fieldAttempts[fieldToAsk] || 0;
+  
+  // SAFETY: If we've asked this exact field 3+ times, skip it permanently to prevent infinite loops
+  if (currentAttempts >= 3) {
+    console.log(`[askClarifyingQuestion] ⛔ SAFETY: Field "${fieldToAsk}" attempted ${currentAttempts} times, SKIPPING permanently`);
+    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
+    updatedAttempts[fieldToAsk] = 999; // Mark as permanently skipped
+    const remainingFields = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
+    return {
+      missingFields: remainingFields,
+      fieldAttempts: updatedAttempts,
+    };
+  }
   
   const remainingAfterThis = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
   console.log(`[askClarifyingQuestion] Asking for field: "${fieldToAsk}" (attempt ${currentAttempts + 1}), remaining: [${remainingAfterThis.join(', ')}]`);
@@ -998,7 +1024,9 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       
       const updatedMessages = [...state.messages, new AIMessage(question)];
       const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-      updatedAttempts[fieldToAsk] = currentAttempts + 1;
+      // Mark both name and email as attempted so we don't re-ask the bundle
+      updatedAttempts['contactDetails.name'] = (updatedAttempts['contactDetails.name'] || 0) + 1;
+      updatedAttempts['contactDetails.email'] = (updatedAttempts['contactDetails.email'] || 0) + 1;
       
       return {
         currentQuestion: question,
@@ -1325,6 +1353,15 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
   // NEW: Handle Yes/No fields (wantsContact) with simple affirmative/negative matching
   const yesNoFields = ['contactDetails.wantsContact'];
   if (yesNoFields.some(f => fieldBeingAsked.includes(f))) {
+    // Guardrail: Only treat this as a contact yes/no question if the last agent prompt was about contact
+    // This prevents misfires when the state says "wantsContact" but the actual question was about the complaint details
+    const contactQuestionContext = `${state.currentQuestion || ''} ${lastAgentMessage || ''}`.toLowerCase();
+    const isContactQuestion = /contact (you|u)|reach you|follow up/.test(contactQuestionContext);
+    if (!isContactQuestion) {
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - Skipping yes/no handling; last question not about contact`);
+      return {};
+    }
+
     const trimmed = lastUserMessage.trim().toLowerCase();
     const fieldAttempts = state.fieldAttempts || {};
     const currentAttempts = fieldAttempts[fieldBeingAsked] || 0;
@@ -1506,11 +1543,34 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
   const t0 = Date.now();
   const lastMessage = state.messages[state.messages.length - 1];
   const userReply = lastMessage?.content?.toString() || "";
-  const { currentQuestion, complaint, missingFields } = state;
+  const { currentQuestion } = state;
+  let { complaint, missingFields } = state as any;
 
   if (!currentQuestion || !missingFields || missingFields.length === 0) {
     console.log(`[updateComplaint] ${Date.now() - t0}ms - Skipped (no fields to update)`);
     return {};
+  }
+
+  // FAST PATH: If the user response contains an email, capture it immediately and drop it from missingFields
+  const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const emailMatch = userReply.match(emailRegex);
+  if (emailMatch) {
+    const email = emailMatch[0];
+    const fieldAttempts = state.fieldAttempts || {};
+    const resetAttempts = { ...fieldAttempts };
+    delete resetAttempts['contactDetails.email'];
+    complaint = { ...complaint, contactDetails: { ...(complaint.contactDetails || {}), email } };
+    missingFields = (missingFields || []).filter((f: string) => f !== 'contactDetails.email');
+    console.log(`[updateComplaint] Captured email from free-text: ${email}, remaining missing: [${missingFields.join(', ')}]`);
+    // Note: we continue processing to allow capturing name or other fields in the same turn
+    // Return early only if there are no more missing fields to process this turn
+    if (missingFields.length === 0) {
+      return {
+        complaint,
+        missingFields,
+        fieldAttempts: resetAttempts,
+      };
+    }
   }
 
   const fieldToUpdate = missingFields[0];
@@ -1756,58 +1816,17 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
   }
   
   // NEW: Handle bundled contact details response (when user provides multiple fields at once)
+  // Uses LLM extraction only for maximum flexibility - handles any phrasing
   const contactFields = ['contactDetails.name', 'contactDetails.email', 'contactDetails.wantsContact'];
   if (contactFields.includes(fieldToUpdate)) {
-    // First pass: rule-based extraction for common patterns to reduce LLM failures
-    const updatedComplaint = { ...complaint } as any;
-    updatedComplaint.contactDetails = { ...(complaint.contactDetails || {}) };
-    const collectedNow: string[] = [];
+    // LLM-based extraction - handles all natural language variations
+    const extractMultiplePrompt = `Extract contact information from this user response. Handle any natural phrasing flexibly.
 
-    // Email detection (simple regex) and explicit "no email" handling
-    const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-    const negativeEmailRegex = /(don't\s*have|no|without|not\s*available).{0,10}(email|e-mail)/i;
-    const emailMatch = userReply.match(emailRegex);
-    if (emailMatch) {
-      updatedComplaint.contactDetails.email = emailMatch[0];
-      collectedNow.push('contactDetails.email');
-    } else if (negativeEmailRegex.test(userReply)) {
-      delete updatedComplaint.contactDetails.email;
-      collectedNow.push('contactDetails.email');
-    }
-
-    // wantsContact quick parse (extra safety)
-    if (isAffirmative(userReply)) {
-      updatedComplaint.contactDetails.wantsContact = true;
-      collectedNow.push('contactDetails.wantsContact');
-    } else if (isNegative(userReply)) {
-      updatedComplaint.contactDetails.wantsContact = false;
-      collectedNow.push('contactDetails.wantsContact');
-    }
-
-    // If we collected any contact fields via rules, update missingFields/attempts immediately
-    if (collectedNow.length > 0) {
-      const remainingAfterRule = missingFields.filter((f: string) => !collectedNow.includes(f));
-      const fieldAttempts = state.fieldAttempts || {};
-      const resetAttempts = { ...fieldAttempts };
-      collectedNow.forEach(f => delete resetAttempts[f]);
-      console.log(`[updateComplaint] Rule-based contact capture: ${collectedNow.join(', ')}; remaining: [${remainingAfterRule.join(', ')}]`);
-      // If we still need other contact fields, continue to LLM extraction below; otherwise return now
-      if (contactFields.every(f => !remainingAfterRule.includes(f))) {
-        return {
-          complaint: updatedComplaint,
-          missingFields: remainingAfterRule,
-          fieldAttempts: resetAttempts,
-        };
-      }
-      // Replace complaint for the next LLM extraction step so we don't lose captured data
-      complaint.contactDetails = updatedComplaint.contactDetails;
-    }
-
-    // First check if user is saying they don't have email
-    const hasNegativeEmail = /don't\s*have|no\s+email|n\/a|not\s*applicable|none/i.test(userReply);
-    
-    // Try to extract all contact fields from the response
-    const extractMultiplePrompt = `Extract contact information from this user response. IMPORTANT: If user says they don't have email, mark that field as "NOT_PROVIDED" instead of null.
+IMPORTANT RULES:
+- Extract name from ANY phrase: "my name is X", "I'm X", "X here", "call me X", "it's X", "this is X", or just "X" alone
+- Extract email from any email address format
+- If user says they don't have email or it's not provided, mark as "NOT_PROVIDED"
+- For wantsContact: detect affirmative (yes/sure/okay) or negative (no/nope) intent
 
 User response: "${userReply}"
 
@@ -1880,6 +1899,23 @@ Respond ONLY with JSON:
         // Reset attempts for all collected fields
         contactFields.forEach(f => delete resetAttempts[f]);
         
+        return {
+          complaint: updatedComplaint,
+          missingFields: remainingFields,
+          fieldAttempts: resetAttempts,
+        };
+      }
+
+      // SAFETY: If JSON parsing failed but there's a clear email, capture it to avoid re-asking
+      const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+      const emailFallback = multiContent.match(emailRegex);
+      if (emailFallback) {
+        const updatedComplaint = { ...complaint, contactDetails: { ...(complaint.contactDetails || {}), email: emailFallback[0] } };
+        const remainingFields = missingFields.filter((f: string) => f !== 'contactDetails.email');
+        const fieldAttempts = state.fieldAttempts || {};
+        const resetAttempts = { ...fieldAttempts };
+        delete resetAttempts['contactDetails.email'];
+        console.log(`[updateComplaint] Fallback email capture: ${emailFallback[0]}, remaining: [${remainingFields.join(', ')}]`);
         return {
           complaint: updatedComplaint,
           missingFields: remainingFields,
@@ -2092,12 +2128,18 @@ export async function generateFinalResponse(state: GraphState): Promise<Partial<
       const value = (complaint.contactDetails as any)?.[field];
       return !value || value === 'unknown';
     });
-    
-    if (missingContactFields.length > 0) {
+
+    // If contact details are missing but we've already asked at least once, do not block final response
+    const fieldAttempts = (state as any).fieldAttempts || {};
+    const triedContact = contactFields.every(f => (fieldAttempts[`contactDetails.${f}`] || 0) > 0);
+
+    if (missingContactFields.length > 0 && !triedContact) {
       console.log(`[generateFinalResponse] User wants contact but missing fields: [${missingContactFields.join(', ')}]. Returning empty to trigger contact detail collection.`);
-      // Don't generate final message yet - the conversation should loop back to askQuestion
-      // This is a safety measure in case determineMissingFields didn't add contact fields
       return {};
+    }
+
+    if (missingContactFields.length > 0 && triedContact) {
+      console.log(`[generateFinalResponse] Contact missing after at least one ask; proceeding without re-asking. Missing: [${missingContactFields.join(', ')}]`);
     }
   }
 

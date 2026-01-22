@@ -18,14 +18,16 @@ export async function saveComplaintRecord(params: {
   sessionId: string;
   complaint: Partial<Complaint>;
   submissionTimeISO: string;
+  transcript: { role: string; content: string }[];
 }): Promise<void> {
-  const { sessionId, complaint, submissionTimeISO } = params;
+  const { sessionId, complaint, submissionTimeISO, transcript } = params;
   const record = {
     sessionId,
     submissionTime: submissionTimeISO,
     description: complaint.description ?? "",
     urgency: complaint.urgencyLevel ?? null,
     fields: complaint, // store the full collected fields object
+    transcript: transcript ?? [],
   };
   const line = JSON.stringify(record) + "\n";
   await fs.appendFile(FILE_PATH, line, { encoding: "utf8" });
