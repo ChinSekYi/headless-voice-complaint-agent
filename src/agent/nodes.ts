@@ -1608,7 +1608,7 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
 
 User response: "${userReply}"
 Fields (JSON keys):
-${remainingSituation.map(f => `- ${f}`).join('\n')}
+${remainingSituation.map((f: string) => `- ${f}`).join('\n')}
 
 Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact": "...", "people.role": "...", "event.location": "..."}`;
 
