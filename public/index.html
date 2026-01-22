@@ -794,7 +794,7 @@
         // Show transcription immediately
         if (data.transcription) {
           loadingMsg.remove();
-          addMessage('user', `🎤 ${data.transcription}`);
+          addMessage('user', data.transcription);
           messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 

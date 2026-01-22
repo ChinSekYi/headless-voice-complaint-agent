@@ -1,7 +1,7 @@
 import express from "express";
 import "dotenv/config";
 import { createComplaintGraph, createContinuationGraph, type GraphState } from "./agent/index.js";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, BaseMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
 import { initStorage, saveComplaintRecord } from "./storage.js";
 import { transcribeAudio, synthesizeSpeech } from "./voiceService.js";
@@ -18,18 +18,41 @@ const sessions = new Map<string, GraphState>();
 const graph = createComplaintGraph();
 const continuationGraph = createContinuationGraph();
 
+// Convert LangChain messages into a simple transcript array for storage
+function buildTranscript(messages: BaseMessage[]): { role: string; content: string }[] {
+  return messages.map((m) => {
+    const role = (m as any)?._getType?.() ?? m.constructor?.name ?? "unknown"; // typically 'human' or 'ai'
+    const content = typeof m.content === 'string'
+      ? m.content
+      : Array.isArray(m.content)
+        ? m.content.map((p: any) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ')
+        : String(m.content ?? '');
+    return { role, content };
+  });
+}
+
 app.post("/voice", async (req, res) => {
   try {
     const t0 = Date.now();
     let { text, sessionId: providedSessionId, audioBase64 } = req.body;
     let transcription: string | null = null;
+
+    // Simple sanitizer to strip emojis and non-text markers that confuse intent parsing
+    const sanitizeUserText = (raw: string | null | undefined): string => {
+      if (!raw) return "";
+      return raw
+        .replace(/\p{Extended_Pictographic}/gu, "")
+        .replace(/[\uFE0F\u200D]/g, "")
+        .replace(/[^\p{L}\p{N}\p{P}\p{Zs}]/gu, " ")
+        .trim();
+    };
     
     // If audio is provided, transcribe it first
     if (audioBase64 && !text) {
       try {
         const audioBuffer = Buffer.from(audioBase64, 'base64');
         transcription = await transcribeAudio(audioBuffer);
-        text = transcription;
+        text = sanitizeUserText(transcription);
         console.log(`[STT] Transcribed: "${text}"`);
       } catch (error) {
         console.error("[STT] Transcription failed:", error);
@@ -43,6 +66,9 @@ app.post("/voice", async (req, res) => {
     if (!text) {
       return res.status(400).json({ error: "Text or audio is required" });
     }
+
+    // Sanitize raw text input as well
+    text = sanitizeUserText(text);
 
     // Get or create session
     let sessionId = providedSessionId;
@@ -128,6 +154,7 @@ app.post("/voice", async (req, res) => {
             sessionId,
             complaint: result.complaint,
             submissionTimeISO: new Date().toISOString(),
+            transcript: buildTranscript(result.messages),
           });
         } catch (err) {
           console.warn("Failed to persist complaint:", err);
@@ -197,7 +224,8 @@ app.post("/end", async (req, res) => {
         await saveComplaintRecord({
           sessionId,
           complaint: finalState.complaint,
-          submissionTimeISO: new Date().toISOString()
+          submissionTimeISO: new Date().toISOString(),
+          transcript: buildTranscript(finalState.messages || []),
         });
         console.log(`[/end] Saved complaint for session ${sessionId}`);
       } catch (err) {
