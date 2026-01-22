@@ -4,10 +4,11 @@ import { createComplaintGraph, createContinuationGraph, type GraphState } from "
 import { HumanMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
 import { initStorage, saveComplaintRecord } from "./storage.js";
+import { transcribeAudio, synthesizeSpeech } from "./voiceService.js";
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' })); // Increased limit for audio data
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static("public"));
 
 // In-memory session store for multi-turn conversations
@@ -20,10 +21,27 @@ const continuationGraph = createContinuationGraph();
 app.post("/voice", async (req, res) => {
   try {
     const t0 = Date.now();
-    const { text, sessionId: providedSessionId } = req.body;
+    let { text, sessionId: providedSessionId, audioBase64 } = req.body;
+    let transcription: string | null = null;
+    
+    // If audio is provided, transcribe it first
+    if (audioBase64 && !text) {
+      try {
+        const audioBuffer = Buffer.from(audioBase64, 'base64');
+        transcription = await transcribeAudio(audioBuffer);
+        text = transcription;
+        console.log(`[STT] Transcribed: "${text}"`);
+      } catch (error) {
+        console.error("[STT] Transcription failed:", error);
+        return res.status(400).json({ 
+          error: "Speech transcription failed", 
+          details: error instanceof Error ? error.message : String(error) 
+        });
+      }
+    }
     
     if (!text) {
-      return res.status(400).json({ error: "Text is required" });
+      return res.status(400).json({ error: "Text or audio is required" });
     }
 
     // Get or create session
@@ -54,19 +72,31 @@ app.post("/voice", async (req, res) => {
       const totalMs = Date.now() - t0;
       const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
       const lastMessage = lastAI || result.messages[result.messages.length - 1];
+      const textResponse = lastMessage?.content?.toString() || 'No response';
       
       console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
+      // Generate audio response
+      let audioBase64 = null;
+      try {
+        audioBase64 = await synthesizeSpeech(textResponse);
+        console.log(`[TTS] Synthesized ${audioBase64.length} bytes`);
+      } catch (error) {
+        console.error("[TTS] Synthesis failed:", error);
+        // Continue without audio
+      }
+      
       return res.json({
         sessionId,
-        textResponse: lastMessage?.content?.toString() || 'No response',
+        textResponse,
         complaintType: result.complaint.subcategory,
         isComplete: result.isComplete,
         needsMoreInfo: result.needsMoreInfo,
-        audioBase64: null,
+        audioBase64,
         metrics: { totalMs },
         complaint: result.complaint,
         missingFields: result.missingFields,
+        transcription,
       });
     } else {
       // Existing session - user is replying to a question
@@ -87,6 +117,7 @@ app.post("/voice", async (req, res) => {
       const totalMs = Date.now() - t0;
       const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
       const lastMessage = lastAI || result.messages[result.messages.length - 1];
+      const textResponse = lastMessage?.content?.toString() || 'No response';
       
       console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
       
@@ -104,21 +135,86 @@ app.post("/voice", async (req, res) => {
         sessions.delete(sessionId);
       }
       
+      // Generate audio response
+      let audioBase64 = null;
+      try {
+        audioBase64 = await synthesizeSpeech(textResponse);
+        console.log(`[TTS] Synthesized ${audioBase64.length} bytes`);
+      } catch (error) {
+        console.error("[TTS] Synthesis failed:", error);
+        // Continue without audio
+      }
+      
       return res.json({
         sessionId,
-        textResponse: lastMessage?.content?.toString() || 'No response',
+        textResponse,
         complaintType: result.complaint.subcategory,
         isComplete: result.isComplete,
         needsMoreInfo: result.needsMoreInfo,
-        audioBase64: null,
+        audioBase64,
         metrics: { totalMs },
         complaint: result.complaint,
         missingFields: result.missingFields,
+        transcription,
       });
     }
   } catch (error) {
     console.error("Error in /voice endpoint:", error);
     res.status(500).json({ error: "Internal Server Error", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/synthesize", async (req, res) => {
+  try {
+    const { text } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    const audioBase64 = await synthesizeSpeech(text);
+    return res.json({ audioBase64 });
+  } catch (error) {
+    console.error("Error in /synthesize endpoint:", error);
+    res.status(500).json({ error: "Synthesis failed", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/end", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    
+    // Get the final complaint state from session
+    const finalState = sessions.get(sessionId);
+    
+    if (finalState && finalState.complaint) {
+      // Save the complaint to storage
+      try {
+        await saveComplaintRecord({
+          sessionId,
+          complaint: finalState.complaint,
+          submissionTimeISO: new Date().toISOString()
+        });
+        console.log(`[/end] Saved complaint for session ${sessionId}`);
+      } catch (err) {
+        console.warn(`[/end] Failed to save complaint: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    
+    // Clean up the session
+    sessions.delete(sessionId);
+    
+    return res.json({ 
+      success: true, 
+      message: "Conversation ended and complaint saved" 
+    });
+  } catch (error) {
+    console.error("Error in /end endpoint:", error);
+    res.status(500).json({ error: "Failed to end conversation", details: error instanceof Error ? error.message : String(error) });
   }
 });
 
@@ -131,12 +227,14 @@ app.listen(3000, () => {
   const requiredEnvVars = [
     'AZURE_OPENAI_API_KEY',
     'AZURE_OPENAI_ENDPOINT',
-    'AZURE_OPENAI_DEPLOYMENT'
+    'AZURE_OPENAI_DEPLOYMENT',
+    'AZURE_SPEECH_KEY',
+    'AZURE_SPEECH_REGION'
   ];
   
   const missing = requiredEnvVars.filter(v => !process.env[v]);
   if (missing.length > 0) {
     console.warn(`⚠️  Missing environment variables: ${missing.join(', ')}`);
-    console.warn('   LLM features will not work. Check your .env file.');
+    console.warn('   Some features will not work. Check your .env file.');
   }
 });

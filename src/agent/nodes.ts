@@ -926,7 +926,7 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
 
   // OPTIMIZATION: For typeOfCare, provide dropdown-style options instead of open-ended question
   if (fieldToAsk === "typeOfCare") {
-    const question = `To route your concern to the right department, could you tell me which service or department this was related to?\n\n${renderTypeOfCareOptionsText()}\n\nYou can reply with the number or name. If you don't know, just say "don't know" and we'll move on.`;
+    const question = `To route your concern to the right department, could you tell me which service or department this was related to?\n\n${renderTypeOfCareOptionsText()}\n\nIf you don't know, just say "don't know" and we'll move on.`;
     
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
@@ -940,9 +940,22 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
     };
   }
   
-  // NEW: For impact, provide dropdown-style options to reduce ambiguity
+  // NEW: For impact, ask conversational question with contextual concerns
   if (fieldToAsk === "impact") {
-    const question = `I'm sorry this happened. How did this affect you?\n\n${IMPACT_OPTIONS.join('\n')}\n\nYou can reply with the number, a few words, or skip. If you don't know, just say "don't know" and we'll move on.`;
+    let contextualConcerns = "like stress, delays in care, or affecting your daily activities";
+    
+    // Tailor concerns based on complaint type
+    if (complaint.subcategory === 'WAIT_TIME') {
+      contextualConcerns = "like extra stress, time lost, or affecting your plans";
+    } else if (complaint.subcategory === 'BILLING') {
+      contextualConcerns = "like financial strain, stress, or affecting your other medical care";
+    } else if (complaint.subcategory === 'MEDICATION') {
+      contextualConcerns = "like health impacts, side effects, or worry about your treatment";
+    } else if (complaint.subcategory === 'FACILITIES') {
+      contextualConcerns = "like discomfort, sleep disruption, or affecting your recovery";
+    }
+    
+    const question = `How did this affect you? (for example, ${contextualConcerns})`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -986,7 +999,7 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
     
     if (missingContactFields.length >= 2) {
       // Ask for main contact details (skip wantsContact as we already have it)
-      const question = `Thank you. To help us follow up with you, could you please provide:\n\n• Your name\n• Your email address\n• Your contact number\n• Are you the patient? (Yes/No)\n\nPlease separate your answers with commas (e.g., John Doe, john@email.com, 555-1234, Yes).`;
+      const question = `Thank you. To help us follow up with you, could you please share your name, email address, contact number, and let me know if you're the patient?`;
       
       const updatedMessages = [...state.messages, new AIMessage(question)];
       const updatedAttempts: Record<string, number> = { ...fieldAttempts };
@@ -1018,7 +1031,7 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
   
   // Handle wantsContact yes/no question
   if (fieldToAsk === "contactDetails.wantsContact") {
-    const question = `Would you like us to contact you regarding this feedback? (Yes/No)`;
+    const question = `Thank you for sharing this information. Would you like us to contact you regarding this complaint? (Yes/No)`;
     const updatedMessages = [...state.messages, new AIMessage(question)];
     const updatedAttempts: Record<string, number> = { ...fieldAttempts };
     updatedAttempts[fieldToAsk] = currentAttempts + 1;
@@ -1123,7 +1136,9 @@ export async function interpretUserResponse(state: GraphState): Promise<Partial<
 
     const fieldAttempts = state.fieldAttempts || {};
     const resetAttempts = { ...fieldAttempts };
-    if (fieldToSkip) delete resetAttempts[fieldToSkip];
+    // CRITICAL: Mark this field as "attempted" with a high number so determineMissingFields filters it out
+    // (Don't delete - that would allow re-asking. Instead set to 999 to permanently exclude it)
+    if (fieldToSkip) resetAttempts[fieldToSkip] = 999;
 
     console.log(`[interpretUserResponse] ${Date.now() - t0}ms - Fast path: SKIP detected for ${fieldToSkip || 'unknown field'}`);
     const ack = "No worries, we'll skip that and move on.";
@@ -1266,9 +1281,9 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
   const fieldBeingAsked = missingFields?.[0] || '';
   
   // Validate DATE fields with rule-based checks
-  // IMPORTANT: Only apply date validation if we're actually asking for a date, NOT for billing amounts
-  const isAskingForDate = dateFields.some(f => fieldBeingAsked.includes(f)) || 
-                          (lastAgentMessage.toLowerCase().includes('when did') && !lastAgentMessage.toLowerCase().includes('amount') && !lastAgentMessage.toLowerCase().includes('charged'));
+  // IMPORTANT: Only apply date validation if we're specifically asking for a date field
+  // NOT just if the message contains "when did" (to avoid validating duration as a date)
+  const isAskingForDate = dateFields.some(f => fieldBeingAsked.includes(f));
   
   if (isAskingForDate) {
     const dateValidation = validateDate(lastUserMessage);
@@ -1318,6 +1333,84 @@ export async function validateExtractedData(state: GraphState): Promise<Partial<
     console.log(`[validateExtracted] Field: "${fieldBeingAsked}", Last msg contains 'affect': ${lastAgentMessage.toLowerCase().includes('affect')}`);
     return {};
   }
+
+  // NEW: Skip strict LLM validation for contact detail fields (name, email, phone)
+  // These fields are optional and user responses can vary widely
+  const optionalContactFields = ['contactDetails.name', 'contactDetails.email', 'contactDetails.contactNo'];
+  if (optionalContactFields.some(f => fieldBeingAsked.includes(f))) {
+    console.log(`[validateExtracted] ${Date.now() - t0}ms - ✓ Optional contact field (${fieldBeingAsked}) detected, SKIPPING strict LLM validation`);
+    return {};
+  }
+
+  // NEW: Handle Yes/No fields (wantsContact, isPatient) with simple affirmative/negative matching
+  const yesNoFields = ['contactDetails.wantsContact', 'contactDetails.isPatient'];
+  if (yesNoFields.some(f => fieldBeingAsked.includes(f))) {
+    const trimmed = lastUserMessage.trim().toLowerCase();
+    const fieldAttempts = state.fieldAttempts || {};
+    const currentAttempts = fieldAttempts[fieldBeingAsked] || 0;
+
+    // Check for clear yes/no answer
+    if (isAffirmative(trimmed)) {
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - ✓ Yes/No field (${fieldBeingAsked}): AFFIRMATIVE detected`);
+      return {};
+    }
+    
+    if (isNegative(trimmed)) {
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - ✓ Yes/No field (${fieldBeingAsked}): NEGATIVE detected`);
+      return {};
+    }
+
+    // If neither yes nor no, and this is the first attempt, ask for clarification
+    if (currentAttempts === 0) {
+      let clarification = '';
+      if (fieldBeingAsked.includes('wantsContact')) {
+        clarification = `Sorry, I didn't catch that. Would you like us to contact you about this complaint? Please say Yes or No.`;
+      } else if (fieldBeingAsked.includes('isPatient')) {
+        clarification = `Sorry, I didn't catch that. Are you the patient? Please say Yes or No.`;
+      }
+      console.log(`[validateExtracted] ${Date.now() - t0}ms - Yes/No field needs clarification (attempt 1)`);
+      return {
+        needsMoreInfo: true,
+        currentQuestion: clarification,
+        messages: [...state.messages, new AIMessage(clarification)],
+        missingFields: [fieldBeingAsked],
+      };
+    }
+
+    // Second attempt: if still no clear yes/no, assume they don't want to engage further
+    if (currentAttempts >= 1) {
+      // For wantsContact: default to false and move on
+      if (fieldBeingAsked.includes('wantsContact')) {
+        console.log(`[validateExtracted] ${Date.now() - t0}ms - No clear Yes/No for wantsContact after 2 attempts, defaulting to false`);
+        const updatedComplaint = { ...state.complaint } as any;
+        if (!updatedComplaint.contactDetails) {
+          updatedComplaint.contactDetails = {};
+        }
+        updatedComplaint.contactDetails.wantsContact = false;
+        
+        return {
+          complaint: updatedComplaint,
+          missingFields: (state.missingFields || []).slice(1),
+        };
+      }
+      
+      // For isPatient: default to true (assume they are the patient) and move on
+      if (fieldBeingAsked.includes('isPatient')) {
+        console.log(`[validateExtracted] ${Date.now() - t0}ms - No clear Yes/No for isPatient after 2 attempts, defaulting to true`);
+        const updatedComplaint = { ...state.complaint } as any;
+        if (!updatedComplaint.contactDetails) {
+          updatedComplaint.contactDetails = {};
+        }
+        updatedComplaint.contactDetails.isPatient = true;
+        
+        return {
+          complaint: updatedComplaint,
+          missingFields: (state.missingFields || []).slice(1),
+        };
+      }
+    }
+  }
+
 
   // STRATEGY 2: LLM-Based Validation (Flexible) - Fallback for complex cases
 
@@ -1459,6 +1552,26 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
   const fieldToUpdate = missingFields[0];
   if (!fieldToUpdate) {
     return {};
+  }
+
+  // CRITICAL FIX: If user said they want to skip this field, don't extract - just remove it
+  if (isSkip(userReply)) {
+    console.log(`[updateComplaint] User said 'skip' for ${fieldToUpdate}, removing from missingFields`);
+    const updatedMissingFields = missingFields.slice(1);
+    const updatedComplaint = { ...complaint } as any;
+    // Mark skipped fields as 'unknown' to prevent re-asking (consistent with setUnknownValue)
+    const updated = setUnknownValue(updatedComplaint, fieldToUpdate);
+    Object.assign(updatedComplaint, updated);
+    
+    const fieldAttempts = state.fieldAttempts || {};
+    const resetAttempts = { ...fieldAttempts };
+    // CRITICAL: Mark as "attempted 999 times" to permanently exclude from missingFields
+    resetAttempts[fieldToUpdate] = 999;
+    return {
+      complaint: updatedComplaint,
+      missingFields: updatedMissingFields,
+      fieldAttempts: resetAttempts,
+    };
   }
 
   // If the user answered a bundled question, try to capture multiple situation fields at once
@@ -1642,11 +1755,10 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
   
   // NEW: Handle boolean fields for contact details
   if (fieldToUpdate === "contactDetails.isPatient" || fieldToUpdate === "contactDetails.wantsContact") {
-    const yesPattern = /^(yes|yup|yeah|ya|y|true|i am|i'm the patient|me|myself)$/i;
-    const noPattern = /^(no|nope|nah|n|false|not me|someone else|on behalf)$/i;
     const trimmed = userReply.trim().toLowerCase();
     
-    if (yesPattern.test(trimmed)) {
+    // Use the same affirmative/negative patterns as validation
+    if (isAffirmative(trimmed)) {
       // User said yes - update complaint and mark field as collected
       const fieldName = fieldToUpdate.split('.')[1] as any;
       const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: true };
@@ -1661,7 +1773,7 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
         missingFields: updatedMissingFields,
         fieldAttempts: resetAttempts,
       };
-    } else if (noPattern.test(trimmed)) {
+    } else if (isNegative(trimmed)) {
       // User said no - update complaint and mark field as collected
       const fieldName = fieldToUpdate.split('.')[1] as any;
       const updatedContactDetails = { ...(complaint.contactDetails || {}), [fieldName]: false };
@@ -1682,17 +1794,21 @@ Respond ONLY with JSON, e.g. {"event.date": "...", "typeOfCare": "...", "impact"
   // NEW: Handle bundled contact details response (when user provides multiple fields at once)
   const contactFields = ['contactDetails.name', 'contactDetails.email', 'contactDetails.contactNo', 'contactDetails.isPatient', 'contactDetails.wantsContact'];
   if (contactFields.includes(fieldToUpdate)) {
+    // First check if user is saying they don't have certain contact info (email/phone)
+    const hasNegativeEmail = /don't\s*have|no\s+email|n\/a|not\s*applicable|none/i.test(userReply);
+    const hasNegativePhone = /don't\s*have|no\s+phone|can't\s+share|not\s+available/i.test(userReply);
+    const hasPhonePreference = /phone|call|tel/i.test(userReply) && !userReply.includes('email');
+    
     // Try to extract all contact fields from the response
-    const extractMultiplePrompt = `Extract contact information from this user response. Extract whatever is available.
+    const extractMultiplePrompt = `Extract contact information from this user response. IMPORTANT: If user says they don't have email or phone, mark that field as "NOT_PROVIDED" instead of null.
 
 User response: "${userReply}"
 
-Extract these fields (mark as null if not found):
-- name: Full name
-- email: Email address
-- contactNo: Phone number
+Extract these fields:
+- name: Full name (or null if not mentioned)
+- email: Email address OR "NOT_PROVIDED" if user says they don't have email
+- contactNo: Phone number OR "NOT_PROVIDED" if user says they don't have phone
 - isPatient: Are they the patient? (true/false, null if not mentioned)
-@@- wantsContact: Do they want to be contacted? (true/false, null if not mentioned)
 - wantsContact: Do they want to be contacted? (true/false, null if not mentioned)
 
 Respond ONLY with JSON:
@@ -1726,14 +1842,24 @@ Respond ONLY with JSON:
           updatedComplaint.contactDetails.name = extracted.name;
           contactParts.push(`Name: ${extracted.name}`);
         }
-        if (extracted.email && extracted.email !== "null") {
+        // Handle email: skip if NOT_PROVIDED or null
+        if (extracted.email && extracted.email !== "null" && extracted.email !== "NOT_PROVIDED") {
           updatedComplaint.contactDetails.email = extracted.email;
           contactParts.push(`Email: ${extracted.email}`);
+        } else if (extracted.email === "NOT_PROVIDED") {
+          delete updatedComplaint.contactDetails.email;
+          contactParts.push('Email: Not provided');
         }
-        if (extracted.contactNo && extracted.contactNo !== "null") {
+        
+        // Handle phone: skip if NOT_PROVIDED or null
+        if (extracted.contactNo && extracted.contactNo !== "null" && extracted.contactNo !== "NOT_PROVIDED") {
           updatedComplaint.contactDetails.contactNo = extracted.contactNo;
           contactParts.push(`Phone: ${extracted.contactNo}`);
+        } else if (extracted.contactNo === "NOT_PROVIDED") {
+          delete updatedComplaint.contactDetails.contactNo;
+          contactParts.push('Phone: Not provided');
         }
+        
         if (extracted.isPatient !== null && extracted.isPatient !== "null") {
           updatedComplaint.contactDetails.isPatient = extracted.isPatient;
           contactParts.push(`Patient: ${extracted.isPatient ? 'Yes' : 'No'}`);
@@ -1749,10 +1875,11 @@ Respond ONLY with JSON:
         }
         
         // Remove all collected contact fields from missingFields
+        // IMPORTANT: Count NOT_PROVIDED as "collected" (user explicitly said they don't have it)
         const remainingFields = missingFields.filter((f: string) => {
           if (f === 'contactDetails.name' && extracted.name && extracted.name !== "null") return false;
-          if (f === 'contactDetails.email' && extracted.email && extracted.email !== "null") return false;
-          if (f === 'contactDetails.contactNo' && extracted.contactNo && extracted.contactNo !== "null") return false;
+          if (f === 'contactDetails.email' && (extracted.email === "NOT_PROVIDED" || (extracted.email && extracted.email !== "null" && extracted.email !== "NOT_PROVIDED"))) return false;
+          if (f === 'contactDetails.contactNo' && (extracted.contactNo === "NOT_PROVIDED" || (extracted.contactNo && extracted.contactNo !== "null" && extracted.contactNo !== "NOT_PROVIDED"))) return false;
           if (f === 'contactDetails.isPatient' && extracted.isPatient !== null && extracted.isPatient !== "null") return false;
           return true;
         });
@@ -1781,7 +1908,12 @@ Question asked: "${currentQuestion}"
 Field to extract: ${fieldToUpdate}
 User's response: "${processedReply}"
 
-Extract the value for this field. If the user says "I don't know" or provides no useful info, respond with "UNKNOWN".
+IMPORTANT: If this is an email or phone field (contactDetails.email or contactDetails.contactNo):
+- If the user says they don't have it (e.g., "don't have email", "no phone"), respond with "NOT_PROVIDED"
+- If they provide the value, extract it
+- If unclear, respond with "UNKNOWN"
+
+For other fields, if the user says "I don't know" or provides no useful info, respond with "UNKNOWN".
 
 Respond ONLY with the extracted value, nothing else.`;
 
@@ -1789,6 +1921,22 @@ Respond ONLY with the extracted value, nothing else.`;
   const extractedValue = response.content.toString().trim();
 
   console.log(`[updateComplaint] ${Date.now() - t0}ms - Extracted: ${extractedValue.substring(0, 30)}`);
+
+  // For contact fields, handle NOT_PROVIDED as "field collected but user doesn't have it"
+  if ((fieldToUpdate === 'contactDetails.email' || fieldToUpdate === 'contactDetails.contactNo') && extractedValue === 'NOT_PROVIDED') {
+    console.log(`[updateComplaint] ${Date.now() - t0}ms - User explicitly said they don't have ${fieldToUpdate}, marking as collected`);
+    const updatedComplaint = { ...complaint };
+    // Keep the field undefined (not provided), but remove from missingFields
+    const updatedMissingFields = missingFields.slice(1);
+    const fieldAttempts = state.fieldAttempts || {};
+    const resetAttempts = { ...fieldAttempts };
+    delete resetAttempts[fieldToUpdate];
+    return {
+      complaint: updatedComplaint,
+      missingFields: updatedMissingFields,
+      fieldAttempts: resetAttempts,
+    };
+  }
 
   // Update complaint object
   const updatedComplaint = { ...complaint };

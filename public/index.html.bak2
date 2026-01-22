@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hospital Complaint Handler - Chatbot</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      gap: 20px;
+    }
+
+    .main-layout {
+      display: flex;
+      gap: 20px;
+      width: 100%;
+      max-width: 1200px;
+      height: 90vh;
+      max-height: 800px;
+    }
+
+    .chat-container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 400px;
+    }
+
+    .chat-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .brand-logo {
+      height: 32px;
+      width: auto;
+      background: white;
+      border-radius: 6px;
+      padding: 4px 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .brand-text p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .message {
+      display: flex;
+      animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .message.assistant {
+      justify-content: flex-start;
+    }
+
+    .message-bubble {
+      max-width: 70%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      word-wrap: break-word;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .user .message-bubble {
+      background: #667eea;
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+
+    .assistant .message-bubble {
+      background: #f0f0f0;
+      color: #333;
+      border-bottom-left-radius: 4px;
+    }
+
+    .status-badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 12px;
+      margin-top: 6px;
+      font-weight: 600;
+    }
+
+    .status-asking {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status-complete {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .loading-dots {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .loading-dots span {
+      width: 8px;
+      height: 8px;
+      background: #667eea;
+      border-radius: 50%;
+      animation: bounce 1.4s infinite;
+    }
+
+    .loading-dots span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .loading-dots span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    @keyframes bounce {
+      0%, 80%, 100% {
+        transform: scale(1);
+        opacity: 0.5;
+      }
+      40% {
+        transform: scale(1.2);
+        opacity: 1;
+      }
+    }
+
+    .input-area {
+      background: white;
+      border-top: 2px solid #f0f0f0;
+      padding: 15px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 24px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    input[type="text"]:disabled {
+      background: #f9f9f9;
+      cursor: not-allowed;
+    }
+
+    button {
+      padding: 12px 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 24px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .mic-btn {
+      background: #dc3545;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      position: relative;
+    }
+
+    .mic-btn.recording {
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
+      }
+      50% {
+        box-shadow: 0 0 0 10px rgba(220, 53, 69, 0);
+      }
+    }
+
+    .mic-btn:hover:not(:disabled) {
+      transform: scale(1.1);
+    }
+
+    .audio-player {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #f0f0f0;
+      padding: 8px 12px;
+      border-radius: 20px;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+
+    .play-btn {
+      background: #667eea;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .audio-wave {
+      flex: 1;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .audio-wave span {
+      width: 3px;
+      height: 100%;
+      background: #667eea;
+      border-radius: 2px;
+      opacity: 0.3;
+    }
+
+    .recording-indicator {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #dc3545;
+      color: white;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .recording-indicator.active {
+      display: flex;
+    }
+
+    .recording-indicator .pulse-dot {
+      width: 8px;
+      height: 8px;
+      background: white;
+      border-radius: 50%;
+      animation: pulse-dot 1s infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .reset-btn {
+      background: #f0f0f0;
+      color: #333;
+      padding: 10px 15px;
+    }
+
+    .reset-btn:hover:not(:disabled) {
+      background: #e0e0e0;
+    }
+
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin: 10px 0;
+      border-left: 4px solid #c33;
+      font-size: 13px;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #999;
+      text-align: center;
+    }
+
+    .empty-state p {
+      margin-bottom: 10px;
+    }
+
+    .metadata {
+      font-size: 11px;
+      color: #999;
+      margin-top: 5px;
+    }
+
+    /* Field Tracker Sidebar */
+    .field-tracker {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      width: 350px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tracker-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 16px 20px;
+    }
+
+    .tracker-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .tracker-brand .brand-logo {
+      height: 26px;
+      padding: 3px 5px;
+    }
+
+    .tracker-brand .brand-text h2 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    .tracker-brand .brand-text p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .tracker-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .tracker-section {
+      margin-bottom: 20px;
+    }
+
+    .tracker-section h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: #667eea;
+      color: white;
+    }
+
+    .field-item {
+      background: #f8f9fa;
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      border-left: 3px solid #e0e0e0;
+      transition: all 0.3s ease;
+    }
+
+    .field-item.collected {
+      background: #d4edda;
+      border-left-color: #28a745;
+      animation: slideIn 0.3s ease;
+    }
+
+    .field-item.missing {
+      background: #fff3cd;
+      border-left-color: #ffc107;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .field-label {
+      font-weight: 600;
+      color: #555;
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .field-value {
+      color: #333;
+      font-size: 13px;
+    }
+
+    .empty-tracker {
+      text-align: center;
+      color: #999;
+      padding: 40px 20px;
+      font-size: 14px;
+    }
+
+    .classification-box {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .classification-box .label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .classification-box .value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    @media (max-width: 900px) {
+      .main-layout {
+        flex-direction: column;
+        height: auto;
+      }
+
+      .field-tracker {
+        width: 100%;
+        max-height: 400px;
+      }
+
+      .chat-container {
+        min-width: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-layout">
+    <!-- Field Tracker Sidebar -->
+    <div class="field-tracker">
+      <div class="tracker-header">
+        <div class="tracker-brand">
+          <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+          <div class="brand-text">
+            <h2>📊 Field Tracker</h2>
+            <p>Real-time data collection</p>
+          </div>
+        </div>
+      </div>
+      <div class="tracker-content" id="trackerContent">
+        <div class="empty-tracker">
+          <p>🔍 Field information will appear here as the conversation progresses.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Interface -->
+    <div class="chat-container">
+    <div class="chat-header">
+      <div class="header-brand">
+        <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
+        <div class="brand-text">
+          <h1>🏥 Hospital Complaint Handler</h1>
+          <p>Multi-turn conversational intake chatbot</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="messages" class="messages">
+      <!-- Welcome message will be added automatically on load -->
+    </div>
+
+    <div class="input-area">
+      <div class="recording-indicator" id="recordingIndicator">
+        <span class="pulse-dot"></span>
+        <span>Recording...</span>
+        <span id="recordingTimer" style="font-weight: normal; margin-left: 8px; font-family: monospace;">0s</span>
+      </div>
+      <div class="input-group">
+        <button id="micBtn" class="mic-btn" onclick="toggleRecording()" title="Record voice message">
+          🎤
+        </button>
+        <input 
+          type="text" 
+          id="messageInput" 
+          placeholder="Type your complaint or response..."
+          autocomplete="off"
+        />
+        <button id="sendBtn" onclick="sendMessage()">Send</button>
+      </div>
+      <button id="resetBtn" class="reset-btn" onclick="resetChat()" style="display: none;">Reset</button>
+    </div>
+  </div>
+  </div>
+
+  <script>
+    const messagesDiv = document.getElementById('messages');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const trackerContent = document.getElementById('trackerContent');
+    const micBtn = document.getElementById('micBtn');
+    const recordingIndicator = document.getElementById('recordingIndicator');
+
+    let sessionId = null;
+    let isLoading = false;
+    let conversationComplete = false;
+    let currentComplaint = {};
+    let currentMissingFields = [];
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+    let currentAudio = null;
+    let recordingStartTime = 0;
+    let recordingTimerInterval = null;
+
+    // Auto-focus input
+    messageInput.focus();
+
+    // Auto-load welcome message on page load
+    window.addEventListener('DOMContentLoaded', async () => {
+      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I’ll ask follow-ups if we need more details.`;
+      
+      
+      // Synthesize and play welcome message
+      try {
+        const response = await fetch('/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: welcomeMessage })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.audioBase64) {
+            playAudio(data.audioBase64);
+          }
+        }
+      } catch (error) {
+        console.error('Error synthesizing welcome message:', error);
+      }
+      addMessage('assistant', welcomeMessage);
+    });
+
+    // Handle Enter key
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !isLoading && messageInput.value.trim()) {
+        sendMessage();
+      }
+    });
+
+    // Voice Recording Functions
+    async function toggleRecording() {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        stopCurrentAudio();
+        startRecording();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true
+          } 
+        });
+        
+        // Prefer simpler formats that Azure can handle better
+        let options = {};
+        if (MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+          options = { mimeType: 'audio/ogg; codecs=opus' };
+          console.log(`[MIC] Recording with format: audio/ogg (Opus)`);
+        } else if (MediaRecorder.isTypeSupported('audio/webm; codecs=opus')) {
+          options = { mimeType: 'audio/webm; codecs=opus' };
+          console.log(`[MIC] Recording with format: audio/webm (Opus)`);
+        } else {
+          console.log(`[MIC] Recording with default format`);
+        }
+        
+        mediaRecorder = new MediaRecorder(stream, options);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+          console.log(`[MIC] Recorded ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+          await sendAudioMessage(audioBlob);
+          
+          // Stop all tracks
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micBtn.textContent = '⏹️';
+        recordingIndicator.classList.add('active');
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        
+        // Start recording timer
+        recordingStartTime = Date.now();
+        const recordingTimer = document.getElementById('recordingTimer');
+        recordingTimerInterval = setInterval(() => {
+          const elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+          recordingTimer.textContent = elapsedSeconds + 's';
+        }, 100);
+      } catch (error) {
+        console.error('Error accessing microphone:', error);
+        alert('Could not access microphone. Please check permissions.');
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.textContent = '🎤';
+        recordingIndicator.classList.remove('active');
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+        
+        // Stop recording timer
+        if (recordingTimerInterval) {
+          clearInterval(recordingTimerInterval);
+          recordingTimerInterval = null;
+        }
+        const recordingTimer = document.getElementById('recordingTimer');
+        recordingTimer.textContent = '0s';
+      }
+    }
+
+    async function sendAudioMessage(audioBlob) {
+      stopCurrentAudio();
+      // Convert blob to WAV PCM16 mono 16k for Azure STT
+      const base64Audio = await blobToWavBase64(audioBlob, 16000);
+      
+      // Show loading with processing message
+      isLoading = true;
+      const loadingMsg = addMessage('assistant', '');
+      loadingMsg.querySelector('.message-bubble').innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div> Transcribing...';
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+      try {
+        const response = await fetch('/voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: base64Audio,
+            sessionId
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.details || errorData.error || 'Server error');
+        }
+
+        const data = await response.json();
+        
+        // Show transcription immediately
+        if (data.transcription) {
+          loadingMsg.remove();
+          addMessage('user', `🎤 ${data.transcription}`);
+          messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Now show loading for agent reply
+        const agentLoadingMsg = addMessage('assistant', '');
+        agentLoadingMsg.querySelector('.message-bubble').innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div> Processing...';
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+        // Show bot response
+        agentLoadingMsg.remove();
+        addMessage('assistant', data.textResponse);
+
+        // Play audio response
+        if (data.audioBase64) {
+          playAudio(data.audioBase64);
+        }
+
+        // Update session
+        sessionId = data.sessionId;
+        currentComplaint = data.complaint || {};
+        currentMissingFields = data.missingFields || [];
+
+        updateFieldTracker(currentComplaint, currentMissingFields);
+
+        if (data.isComplete) {
+          conversationComplete = true;
+          resetBtn.style.display = 'inline-block';
+          messageInput.disabled = true;
+          sendBtn.disabled = true;
+          micBtn.disabled = true;
+          messageInput.placeholder = 'Conversation complete. Click Reset to start over.';
+        }
+      } catch (error) {
+        loadingMsg.remove();
+        addMessage('assistant', `❌ Error: ${error.message}`);
+      } finally {
+        isLoading = false;
+        if (!conversationComplete) {
+          sendBtn.disabled = false;
+          messageInput.disabled = false;
+          micBtn.disabled = false;
+          messageInput.focus();
+        }
+      }
+
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function playAudio(base64Audio) {
+      if (currentAudio) {
+        try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {}
+      }
+      currentAudio = new Audio(`data:audio/mp3;base64,${base64Audio}`);
+      currentAudio.play().catch(err => console.error('Error playing audio:', err));
+    }
+
+    function stopCurrentAudio() {
+      if (currentAudio) {
+        try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {}
+        currentAudio = null;
+      }
+    }
+
+    // Convert recorded blob to WAV PCM16 mono 16k and return base64
+    async function blobToWavBase64(blob, targetSampleRate = 16000) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new AudioContext({ sampleRate: targetSampleRate });
+      const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+      const wavBuffer = encodeWavPCM16(decoded, targetSampleRate);
+      return bufferToBase64(wavBuffer);
+    }
+
+    function encodeWavPCM16(audioBuffer, targetSampleRate) {
+      const channelData = audioBuffer.getChannelData(0);
+      const sourceRate = audioBuffer.sampleRate;
+      const sampleRatio = sourceRate / targetSampleRate;
+      const newLength = Math.floor(channelData.length / sampleRatio);
+      const resampled = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        resampled[i] = channelData[Math.floor(i * sampleRatio)] || 0;
+      }
+
+      const bytesPerSample = 2;
+      const blockAlign = bytesPerSample * 1; // mono
+      const buffer = new ArrayBuffer(44 + resampled.length * bytesPerSample);
+      const view = new DataView(buffer);
+
+      /* RIFF identifier */
+      writeString(view, 0, 'RIFF');
+      /* RIFF chunk length */
+      view.setUint32(4, 36 + resampled.length * bytesPerSample, true);
+      /* RIFF type */
+      writeString(view, 8, 'WAVE');
+      /* format chunk identifier */
+      writeString(view, 12, 'fmt ');
+      /* format chunk length */
+      view.setUint32(16, 16, true);
+      /* sample format (raw) */
+      view.setUint16(20, 1, true);
+      /* channel count */
+      view.setUint16(22, 1, true);
+      /* sample rate */
+      view.setUint32(24, targetSampleRate, true);
+      /* byte rate (sample rate * block align) */
+      view.setUint32(28, targetSampleRate * blockAlign, true);
+      /* block align (channel count * bytes per sample) */
+      view.setUint16(32, blockAlign, true);
+      /* bits per sample */
+      view.setUint16(34, 16, true);
+      /* data chunk identifier */
+      writeString(view, 36, 'data');
+      /* data chunk length */
+      view.setUint32(40, resampled.length * bytesPerSample, true);
+
+      // write PCM samples
+      let offset = 44;
+      for (let i = 0; i < resampled.length; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, resampled[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+
+      return buffer;
+    }
+
+    function writeString(view, offset, string) {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    }
+
+    function bufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(binary);
+    }
+
+    async function sendMessage() {
+      stopCurrentAudio();
+      const text = messageInput.value.trim();
+      if (!text || isLoading || conversationComplete) return;
+
+      // Clear input
+      messageInput.value = '';
+      messageInput.focus();
+
+      // Clear empty state on first message
+      if (!sessionId) {
+        messagesDiv.innerHTML = '';
+      }
+
+      // Add user message
+      addMessage('user', text);
+
+      // Show loading indicator
+      isLoading = true;
+      sendBtn.disabled = true;
+      messageInput.disabled = true;
+      const loadingMsg = addMessage('assistant', '<div class="loading-dots"><span></span><span></span><span></span></div>', true);
+
+      try {
+        const requestBody = { text };
+        if (sessionId) {
+          requestBody.sessionId = sessionId;
+        }
+
+        const response = await fetch('/voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Update session ID
+        if (data.sessionId) {
+          sessionId = data.sessionId;
+        }
+
+        // Update complaint state
+        if (data.complaint) {
+          currentComplaint = data.complaint;
+        }
+        if (data.missingFields) {
+          currentMissingFields = data.missingFields;
+        }
+
+        // Update field tracker
+        updateFieldTracker(currentComplaint, currentMissingFields);
+
+        // Remove loading message
+        loadingMsg.remove();
+
+        // Add assistant response with proper line breaks
+        const responseText = data.textResponse || 'No response received.';
+        // Convert newlines to <br> tags for proper HTML display
+        const formattedResponse = responseText.replace(/\n/g, '<br>');
+        let fullMessage = formattedResponse;
+
+        // Add metadata
+        if (data.complaintType) {
+          fullMessage += `<div class="metadata">Classification: <strong>${data.complaintType}</strong></div>`;
+        }
+
+        // Add status badge
+        if (data.isComplete) {
+          fullMessage += '<div class="status-badge status-complete">✓ Intake Complete</div>';
+          conversationComplete = true;
+          resetBtn.style.display = 'block';
+        } else {
+          fullMessage += '<div class="status-badge status-asking">Awaiting your response...</div>';
+        }
+
+        addMessage('assistant', fullMessage, true);
+
+        // Play audio response
+        if (data.audioBase64) {
+          playAudio(data.audioBase64);
+        }
+
+        // Handle completion
+        if (data.isComplete) {
+          messageInput.disabled = true;
+          sendBtn.disabled = true;
+          micBtn.disabled = true;
+          messageInput.placeholder = 'Conversation complete. Click Reset to start over.';
+        }
+      } catch (error) {
+        loadingMsg.remove();
+        addMessage('assistant', `❌ Error: ${error.message}`);
+      } finally {
+        isLoading = false;
+        if (!conversationComplete) {
+          sendBtn.disabled = false;
+          messageInput.disabled = false;
+          micBtn.disabled = false;
+          // Restore focus to input after re-enabling
+          messageInput.focus();
+        }
+      }
+
+      // Auto-scroll to bottom
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function addMessage(role, content, isHTML = false) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${role}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+
+      if (isHTML) {
+        bubble.innerHTML = content;
+      } else {
+        bubble.textContent = content;
+      }
+
+      messageDiv.appendChild(bubble);
+      messagesDiv.appendChild(messageDiv);
+
+      return messageDiv;
+    }
+
+    function resetChat() {
+      sessionId = null;
+      conversationComplete = false;
+      currentComplaint = {};
+      currentMissingFields = [];
+      
+      messagesDiv.innerHTML = '';
+      
+      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I’ll ask follow-ups if we need more details.`;
+      
+      addMessage('assistant', welcomeMessage);
+      
+      trackerContent.innerHTML = `
+        <div class="empty-tracker">
+          <p>🔍 Field information will appear here as the conversation progresses.</p>
+        </div>
+      `;
+      messageInput.value = '';
+      messageInput.placeholder = 'Type your complaint or response...';
+      messageInput.disabled = false;
+      sendBtn.disabled = false;
+      resetBtn.style.display = 'none';
+      messageInput.focus();
+    }
+
+    function updateFieldTracker(complaint, missingFields) {
+      if (!complaint || Object.keys(complaint).length === 0) {
+        return;
+      }
+
+      let html = '';
+
+      // Classification section
+      if (complaint.domain || complaint.subcategory) {
+        html += '<div class="classification-box">';
+        if (complaint.domain) {
+          html += `<div class="label">Domain</div>`;
+          html += `<div class="value">${formatFieldName(complaint.domain)}</div>`;
+        }
+        if (complaint.subcategory) {
+          html += `<div class="label" style="margin-top: 10px;">Subcategory</div>`;
+          html += `<div class="value">${formatFieldName(complaint.subcategory)}</div>`;
+        }
+        html += '</div>';
+      }
+
+      // Collected fields section
+      const collectedFields = [];
+      
+      if (complaint.description) {
+        collectedFields.push({ label: 'Description', value: complaint.description });
+      }
+      
+      if (complaint.typeOfCare) {
+        collectedFields.push({ label: 'Type of Care', value: formatFieldName(complaint.typeOfCare) });
+      }
+      
+      if (complaint.event) {
+        if (complaint.event.date) {
+          collectedFields.push({ label: 'Event Date', value: complaint.event.date });
+        }
+        if (complaint.event.location) {
+          collectedFields.push({ label: 'Event Location', value: complaint.event.location });
+        }
+      }
+      
+      if (complaint.billing) {
+        if (complaint.billing.amount) {
+          collectedFields.push({ label: 'Billing Amount', value: complaint.billing.amount });
+        }
+        if (complaint.billing.insuranceStatus) {
+          collectedFields.push({ label: 'Insurance Status', value: complaint.billing.insuranceStatus });
+        }
+      }
+      
+      if (complaint.medication && complaint.medication.name) {
+        collectedFields.push({ label: 'Medication Name', value: complaint.medication.name });
+      }
+      
+      if (complaint.people && complaint.people.role) {
+        collectedFields.push({ label: 'Staff Role', value: complaint.people.role });
+      }
+      
+      if (complaint.impact && Array.isArray(complaint.impact)) {
+        collectedFields.push({ 
+          label: 'Impact', 
+          value: complaint.impact.map(i => formatFieldName(i)).join(', ') 
+        });
+      }
+      
+      if (complaint.urgencyLevel) {
+        collectedFields.push({ label: 'Urgency Level', value: formatFieldName(complaint.urgencyLevel) });
+      }
+
+      // Contact details section
+      if (complaint.contactDetails) {
+        const contactFields = [];
+        
+        if (complaint.contactDetails.name) {
+          contactFields.push({ label: 'Contact Name', value: complaint.contactDetails.name });
+        }
+        if (complaint.contactDetails.email) {
+          contactFields.push({ label: 'Contact Email', value: complaint.contactDetails.email });
+        }
+        if (complaint.contactDetails.contactNo) {
+          contactFields.push({ label: 'Contact Phone', value: complaint.contactDetails.contactNo });
+        }
+        if (complaint.contactDetails.isPatient !== undefined) {
+          const patientStatus = complaint.contactDetails.isPatient ? 'Patient' : 'Not Patient';
+          contactFields.push({ label: 'Complainant Type', value: patientStatus });
+        }
+        if (complaint.contactDetails.wantsContact !== undefined) {
+          const contactPref = complaint.contactDetails.wantsContact ? 'Wants Contact' : 'Prefers No Contact';
+          contactFields.push({ label: 'Follow-up Preference', value: contactPref });
+        }
+        if (complaint.contactDetails.address) {
+          contactFields.push({ label: 'Contact Address', value: complaint.contactDetails.address });
+        }
+
+        if (contactFields.length > 0) {
+          collectedFields.push(...contactFields);
+        }
+      }
+
+      if (collectedFields.length > 0) {
+        html += '<div class="tracker-section">';
+        html += `<h3>✓ Collected Fields <span class="section-badge">${collectedFields.length}</span></h3>`;
+        collectedFields.forEach(field => {
+          html += `<div class="field-item collected">`;
+          html += `<span class="field-label">${field.label}</span>`;
+          html += `<div class="field-value">${field.value}</div>`;
+          html += `</div>`;
+        });
+        html += '</div>';
+      }
+
+      // Missing fields section
+      if (missingFields && missingFields.length > 0) {
+        html += '<div class="tracker-section">';
+        html += `<h3>⏳ Pending Fields <span class="section-badge">${missingFields.length}</span></h3>`;
+        missingFields.forEach(field => {
+          html += `<div class="field-item missing">`;
+          html += `<span class="field-label">${formatFieldName(field)}</span>`;
+          html += `<div class="field-value">Awaiting response...</div>`;
+          html += `</div>`;
+        });
+        html += '</div>';
+      }
+
+      trackerContent.innerHTML = html;
+    }
+
+    function formatFieldName(str) {
+      if (!str) return '';
+      return str
+        .replace(/_/g, ' ')
+        .replace(/\./g, ' - ')
+        .toLowerCase()
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
+  </script>
+</body>
+</html>
