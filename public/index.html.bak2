@@ -236,27 +236,6 @@
       cursor: not-allowed;
     }
 
-    .end-btn {
-      background-color: #ff6b6b;
-      color: white;
-      border: none;
-      padding: 10px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 600;
-      transition: all 0.2s ease;
-    }
-
-    .end-btn:hover:not(:disabled) {
-      background-color: #ff5252;
-      transform: scale(1.05);
-    }
-
-    .end-btn:active:not(:disabled) {
-      transform: scale(0.98);
-    }
-
     .mic-btn {
       background: #dc3545;
       width: 48px;
@@ -605,7 +584,6 @@
           autocomplete="off"
         />
         <button id="sendBtn" onclick="sendMessage()">Send</button>
-        <button id="endBtn" class="end-btn" onclick="endConversation()" title="End conversation">End</button>
       </div>
       <button id="resetBtn" class="reset-btn" onclick="resetChat()" style="display: none;">Reset</button>
     </div>
@@ -637,10 +615,9 @@
     messageInput.focus();
 
     // Auto-load welcome message on page load
-    window.addEventListener('load', async () => {
-      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I'll ask follow-ups if we need more details.`;
+    window.addEventListener('DOMContentLoaded', async () => {
+      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I’ll ask follow-ups if we need more details.`;
       
-      addMessage('assistant', welcomeMessage);
       
       // Synthesize and play welcome message
       try {
@@ -659,6 +636,7 @@
       } catch (error) {
         console.error('Error synthesizing welcome message:', error);
       }
+      addMessage('assistant', welcomeMessage);
     });
 
     // Handle Enter key
@@ -1084,67 +1062,6 @@
       sendBtn.disabled = false;
       resetBtn.style.display = 'none';
       messageInput.focus();
-    }
-
-    async function endConversation() {
-      try {
-        // Stop any ongoing recording
-        if (isRecording) {
-          stopRecording();
-        }
-
-        // Stop any currently playing audio
-        if (currentAudio) {
-          stopCurrentAudio();
-        }
-
-        // Disable buttons to prevent further interaction
-        messageInput.disabled = true;
-        sendBtn.disabled = true;
-        const endBtn = document.getElementById('endBtn');
-        if (endBtn) endBtn.disabled = true;
-
-        // Send end request to server to save the complaint
-        if (sessionId) {
-          try {
-            await fetch('/end', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId })
-            });
-          } catch (err) {
-            console.warn('Could not notify server of conversation end:', err);
-          }
-        }
-
-        // Display thank you message
-        const thankYouMessage = `Thank you for sharing your feedback with us. We truly appreciate you taking the time to help us improve our services at Singapore General Hospital. Your complaint has been recorded and our team will review it shortly. We'll be in touch if we need any additional information.`;
-        addMessage('assistant', thankYouMessage);
-
-        // Synthesize and play the thank you message
-        try {
-          const audioResponse = await fetch('/synthesize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: thankYouMessage })
-          });
-          if (audioResponse.ok) {
-            const audioData = await audioResponse.json();
-            playAudio(audioData.audio);
-          }
-        } catch (err) {
-          console.warn('Could not synthesize thank you message:', err);
-        }
-
-        // Show reset button after a brief delay
-        setTimeout(() => {
-          resetBtn.style.display = 'block';
-        }, 1000);
-
-      } catch (error) {
-        console.error('Error ending conversation:', error);
-        addMessage('assistant', 'Thank you for your feedback. Your complaint has been recorded.');
-      }
     }
 
     function updateFieldTracker(complaint, missingFields) {

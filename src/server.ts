@@ -164,6 +164,60 @@ app.post("/voice", async (req, res) => {
   }
 });
 
+app.post("/synthesize", async (req, res) => {
+  try {
+    const { text } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    const audioBase64 = await synthesizeSpeech(text);
+    return res.json({ audioBase64 });
+  } catch (error) {
+    console.error("Error in /synthesize endpoint:", error);
+    res.status(500).json({ error: "Synthesis failed", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/end", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    
+    // Get the final complaint state from session
+    const finalState = sessions.get(sessionId);
+    
+    if (finalState && finalState.complaint) {
+      // Save the complaint to storage
+      try {
+        await saveComplaintRecord({
+          sessionId,
+          complaint: finalState.complaint,
+          submissionTimeISO: new Date().toISOString()
+        });
+        console.log(`[/end] Saved complaint for session ${sessionId}`);
+      } catch (err) {
+        console.warn(`[/end] Failed to save complaint: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    
+    // Clean up the session
+    sessions.delete(sessionId);
+    
+    return res.json({ 
+      success: true, 
+      message: "Conversation ended and complaint saved" 
+    });
+  } catch (error) {
+    console.error("Error in /end endpoint:", error);
+    res.status(500).json({ error: "Failed to end conversation", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 app.listen(3000, () => {
   console.log("Server running at http://localhost:3000");
   // Initialize storage directory and file
