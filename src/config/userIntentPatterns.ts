@@ -186,23 +186,32 @@ export const NEGATIVE_REGEX = createPatternRegex(NEGATIVE_PATTERNS);
 export const SKIP_REGEX = createPatternRegex(SKIP_PATTERNS);
 export const CLARIFICATION_REGEX = createPatternRegex(CLARIFICATION_PATTERNS);
 
+// Normalize user text for pattern matching: trim, lowercase, and remove trailing punctuation
+function normalize(text: string): string {
+  return text.trim().replace(/[.!?]+$/g, '').toLowerCase();
+}
+
 /**
  * Test if a user response matches any pattern category
  */
 export function isAffirmative(text: string): boolean {
-  return AFFIRMATIVE_REGEX.some(regex => regex.test(text.trim()));
+  const normalized = normalize(text);
+  return AFFIRMATIVE_REGEX.some(regex => regex.test(normalized));
 }
 
 export function isNegative(text: string): boolean {
-  return NEGATIVE_REGEX.some(regex => regex.test(text.trim()));
+  const normalized = normalize(text);
+  return NEGATIVE_REGEX.some(regex => regex.test(normalized));
 }
 
 export function isSkip(text: string): boolean {
-  return SKIP_REGEX.some(regex => regex.test(text.trim()));
+  const normalized = normalize(text);
+  return SKIP_REGEX.some(regex => regex.test(normalized));
 }
 
 export function isClarificationRequest(text: string): boolean {
-  return CLARIFICATION_REGEX.some(regex => regex.test(text.trim()));
+  const normalized = normalize(text);
+  return CLARIFICATION_REGEX.some(regex => regex.test(normalized));
 }
 
 /**
@@ -210,7 +219,7 @@ export function isClarificationRequest(text: string): boolean {
  * Returns: 'AFFIRMATIVE' | 'NEGATIVE' | 'SKIP' | 'CLARIFY' | 'ANSWER' | 'UNCLEAR'
  */
 export function determineUserIntent(text: string): 'AFFIRMATIVE' | 'NEGATIVE' | 'SKIP' | 'CLARIFY' | 'ANSWER' | 'UNCLEAR' {
-  const trimmed = text.trim();
+  const trimmed = normalize(text);
 
   if (isAffirmative(trimmed)) return 'AFFIRMATIVE';
   if (isNegative(trimmed)) return 'NEGATIVE';
