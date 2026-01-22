@@ -1,6 +1,7 @@
 {
   "version": 2,
   "rewrites": [
-    { "source": "/", "destination": "/index.html" }
+    { "source": "/", "destination": "/public/index.html" },
+    { "source": "/assets/(.*)", "destination": "/public/assets/$1" }
   ]
 }
