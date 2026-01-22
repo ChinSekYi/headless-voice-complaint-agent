@@ -97,8 +97,6 @@ export interface Complaint {
   contactDetails?: {
     name?: string;
     email?: string;
-    contactNo?: string;
-    isPatient?: boolean;
     wantsContact?: boolean;
   };
   

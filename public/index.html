@@ -257,6 +257,28 @@
       transform: scale(0.98);
     }
 
+    .start-btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      flex: 1;
+    }
+
+    .start-btn:hover:not(:disabled) {
+      transform: scale(1.05);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+    }
+
+    .start-btn:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
     .mic-btn {
       background: #dc3545;
       width: 48px;
@@ -579,7 +601,6 @@
         <img src="/assets/SGH_logo.webp" alt="Singapore General Hospital logo" class="brand-logo" />
         <div class="brand-text">
           <h1>🏥 Hospital Complaint Handler</h1>
-          <p>Multi-turn conversational intake chatbot</p>
         </div>
       </div>
     </div>
@@ -595,7 +616,10 @@
         <span id="recordingTimer" style="font-weight: normal; margin-left: 8px; font-family: monospace;">0s</span>
       </div>
       <div class="input-group">
-        <button id="micBtn" class="mic-btn" onclick="toggleRecording()" title="Record voice message">
+        <button id="startBtn" class="start-btn" onclick="startConversation()" title="Start conversation with voice welcome">
+          🚀 Start
+        </button>
+        <button id="micBtn" class="mic-btn" onclick="toggleRecording()" title="Record voice message" style="display: none;">
           🎤
         </button>
         <input 
@@ -603,9 +627,10 @@
           id="messageInput" 
           placeholder="Type your complaint or response..."
           autocomplete="off"
+          style="display: none;"
         />
-        <button id="sendBtn" onclick="sendMessage()">Send</button>
-        <button id="endBtn" class="end-btn" onclick="endConversation()" title="End conversation">End</button>
+        <button id="sendBtn" onclick="sendMessage()" style="display: none;">Send</button>
+        <button id="endBtn" class="end-btn" onclick="endConversation()" title="End conversation" style="display: none;">End</button>
       </div>
       <button id="resetBtn" class="reset-btn" onclick="resetChat()" style="display: none;">Reset</button>
     </div>
@@ -633,33 +658,7 @@
     let recordingStartTime = 0;
     let recordingTimerInterval = null;
 
-    // Auto-focus input
-    messageInput.focus();
-
-    // Auto-load welcome message on page load
-    window.addEventListener('load', async () => {
-      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I'll ask follow-ups if we need more details.`;
-      
-      addMessage('assistant', welcomeMessage);
-      
-      // Synthesize and play welcome message
-      try {
-        const response = await fetch('/synthesize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: welcomeMessage })
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.audioBase64) {
-            playAudio(data.audioBase64);
-          }
-        }
-      } catch (error) {
-        console.error('Error synthesizing welcome message:', error);
-      }
-    });
+    // Keep input unfocused until user clicks Start to avoid screen readers announcing hidden controls
 
     // Handle Enter key
     messageInput.addEventListener('keypress', (e) => {
@@ -740,7 +739,13 @@
 
     function stopRecording() {
       if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
+        // Ensure very short utterances (yes/no) have at least ~0.8s of audio before stopping
+        const elapsedMs = Date.now() - recordingStartTime;
+        const remainingMs = Math.max(0, 800 - elapsedMs);
+        setTimeout(() => {
+          try { mediaRecorder.stop(); } catch (_) {}
+        }, remainingMs);
+
         isRecording = false;
         micBtn.classList.remove('recording');
         micBtn.textContent = '🎤';
@@ -824,7 +829,7 @@
         }
       } catch (error) {
         loadingMsg.remove();
-        addMessage('assistant', `❌ Error: ${error.message}`);
+        addMessage('assistant', 'Sorry, I could not hear that. Please try again.');
       } finally {
         isLoading = false;
         if (!conversationComplete) {
@@ -848,7 +853,13 @@
 
     function stopCurrentAudio() {
       if (currentAudio) {
-        try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {}
+        try {
+          currentAudio.pause();
+          currentAudio.currentTime = 0;
+          // Clearing the source helps browsers stop buffered playback immediately
+          currentAudio.src = '';
+          currentAudio.load();
+        } catch (e) {}
         currentAudio = null;
       }
     }
@@ -1026,7 +1037,7 @@
         }
       } catch (error) {
         loadingMsg.remove();
-        addMessage('assistant', `❌ Error: ${error.message}`);
+        addMessage('assistant', 'Sorry, I could not process that. Please try again.');
       } finally {
         isLoading = false;
         if (!conversationComplete) {
@@ -1061,17 +1072,62 @@
       return messageDiv;
     }
 
+    async function startConversation() {
+      try {
+        const startBtn = document.getElementById('startBtn');
+        const micBtn = document.getElementById('micBtn');
+        const messageInputElem = document.getElementById('messageInput');
+        const sendBtnElem = document.getElementById('sendBtn');
+        const endBtnElem = document.getElementById('endBtn');
+        
+        // Hide start button and show input controls
+        startBtn.style.display = 'none';
+        startBtn.disabled = true;
+        micBtn.style.display = 'block';
+        messageInputElem.style.display = 'block';
+        sendBtnElem.style.display = 'block';
+        endBtnElem.style.display = 'block';
+        messageInput.disabled = false;
+        micBtn.disabled = false;
+        sendBtn.disabled = false;
+        
+        const welcomeMessage = `Hi, I'm sorry you're dealing with this. Please share a short note about what happened—when, which department, who was involved, what occurred, and how it affected you. I'll listen first and only ask follow-ups if we truly need more details.`;
+        
+        addMessage('assistant', welcomeMessage);
+        
+        // Synthesize and play welcome message
+        try {
+          const audioResponse = await fetch('/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: welcomeMessage })
+          });
+          if (audioResponse.ok) {
+            const audioData = await audioResponse.json();
+            if (audioData.audioBase64) {
+              playAudio(audioData.audioBase64);
+            }
+          }
+        } catch (err) {
+          console.warn('Could not synthesize welcome message:', err);
+        }
+        
+        messageInput.focus();
+      } catch (error) {
+        console.error('Error starting conversation:', error);
+      }
+    }
+
     function resetChat() {
+      // Stop any audio playback immediately
+      stopCurrentAudio();
+
       sessionId = null;
       conversationComplete = false;
       currentComplaint = {};
       currentMissingFields = [];
       
       messagesDiv.innerHTML = '';
-      
-      const welcomeMessage = `Hi, I'm here to help with your SGH experience. Please share a short note covering: when, which department, who was involved, what happened, and how it affected you. I’ll ask follow-ups if we need more details.`;
-      
-      addMessage('assistant', welcomeMessage);
       
       trackerContent.innerHTML = `
         <div class="empty-tracker">
@@ -1080,10 +1136,19 @@
       `;
       messageInput.value = '';
       messageInput.placeholder = 'Type your complaint or response...';
-      messageInput.disabled = false;
-      sendBtn.disabled = false;
+      messageInput.disabled = true;
+      sendBtn.disabled = true;
       resetBtn.style.display = 'none';
-      messageInput.focus();
+      
+      // Show start button, hide input controls
+      const startBtn = document.getElementById('startBtn');
+      const micBtn = document.getElementById('micBtn');
+      const endBtn = document.getElementById('endBtn');
+      startBtn.style.display = 'inline-block';
+      micBtn.style.display = 'none';
+      messageInput.style.display = 'none';
+      sendBtn.style.display = 'none';
+      endBtn.style.display = 'none';
     }
 
     async function endConversation() {
@@ -1130,7 +1195,9 @@
           });
           if (audioResponse.ok) {
             const audioData = await audioResponse.json();
-            playAudio(audioData.audio);
+            if (audioData.audioBase64) {
+              playAudio(audioData.audioBase64);
+            }
           }
         } catch (err) {
           console.warn('Could not synthesize thank you message:', err);

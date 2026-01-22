@@ -18,6 +18,10 @@ export async function transcribeAudio(audioBuffer: Buffer): Promise<string> {
   const speechConfig = sdk.SpeechConfig.fromSubscription(speechKey, speechRegion);
   speechConfig.speechRecognitionLanguage = "en-US";
 
+  // Make short utterances ("yes", "no") easier to catch by relaxing silence windows
+  speechConfig.setProperty(sdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "3000");
+  speechConfig.setProperty(sdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "800");
+
   // Hint format: prefer PCM 16k mono if available, else default
   let pushStream: sdk.PushAudioInputStream;
   try {
@@ -43,6 +47,18 @@ export async function transcribeAudio(audioBuffer: Buffer): Promise<string> {
 
   const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
   const recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
+
+  // Bias recognition toward short confirmations/denials which are easy to miss
+  const phraseList = sdk.PhraseListGrammar.fromRecognizer(recognizer);
+  phraseList.addPhrase("yes");
+  phraseList.addPhrase("yeah");
+  phraseList.addPhrase("yep");
+  phraseList.addPhrase("sure");
+  phraseList.addPhrase("okay");
+  phraseList.addPhrase("ok");
+  phraseList.addPhrase("no");
+  phraseList.addPhrase("nope");
+  phraseList.addPhrase("nah");
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {

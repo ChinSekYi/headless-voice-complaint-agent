@@ -104,22 +104,6 @@ export const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
     category: 'contact',
     examples: 'john@email.com, mary.j@example.org',
   },
-  'contactDetails.contactNo': {
-    name: 'contactDetails.contactNo',
-    dataPath: 'contactDetails.contactNo',
-    explanation: `What's the best phone number to reach you?`,
-    unknownValue: 'unknown',
-    category: 'contact',
-    examples: '65123456, +6581234567, 6512-3456',
-  },
-  'contactDetails.isPatient': {
-    name: 'contactDetails.isPatient',
-    dataPath: 'contactDetails.isPatient',
-    explanation: `Are you the patient, or are you submitting this on behalf of someone else?`,
-    unknownValue: false,
-    category: 'contact',
-    examples: 'yes, no, I\'m submitting for my mother',
-  },
 };
 
 /**
