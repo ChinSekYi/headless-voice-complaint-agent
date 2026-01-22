@@ -1024,7 +1024,9 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
       
       const updatedMessages = [...state.messages, new AIMessage(question)];
       const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-      updatedAttempts[fieldToAsk] = currentAttempts + 1;
+      // Mark both name and email as attempted so we don't re-ask the bundle
+      updatedAttempts['contactDetails.name'] = (updatedAttempts['contactDetails.name'] || 0) + 1;
+      updatedAttempts['contactDetails.email'] = (updatedAttempts['contactDetails.email'] || 0) + 1;
       
       return {
         currentQuestion: question,
@@ -1541,36 +1543,39 @@ export async function updateComplaintFromUserReply(state: GraphState): Promise<P
   const t0 = Date.now();
   const lastMessage = state.messages[state.messages.length - 1];
   const userReply = lastMessage?.content?.toString() || "";
-  const { currentQuestion, complaint, missingFields } = state;
+  const { currentQuestion } = state;
+  let { complaint, missingFields } = state as any;
 
   if (!currentQuestion || !missingFields || missingFields.length === 0) {
     console.log(`[updateComplaint] ${Date.now() - t0}ms - Skipped (no fields to update)`);
     return {};
   }
 
-  const fieldToUpdate = missingFields[0];
-  if (!fieldToUpdate) {
-    return {};
-  }
-
-  // FAST PATH: If we're asking for email and the user response already contains an email, capture immediately
-  if (fieldToUpdate === 'contactDetails.email') {
-    const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-    const emailMatch = userReply.match(emailRegex);
-    if (emailMatch) {
-      const email = emailMatch[0];
-      const updatedComplaint = { ...complaint, contactDetails: { ...(complaint.contactDetails || {}), email } };
-      const updatedMissingFields = missingFields.slice(1);
-      const fieldAttempts = state.fieldAttempts || {};
-      const resetAttempts = { ...fieldAttempts };
-      delete resetAttempts[fieldToUpdate];
-      console.log(`[updateComplaint] Fast-path email captured: ${email}`);
+  // FAST PATH: If the user response contains an email, capture it immediately and drop it from missingFields
+  const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const emailMatch = userReply.match(emailRegex);
+  if (emailMatch) {
+    const email = emailMatch[0];
+    const fieldAttempts = state.fieldAttempts || {};
+    const resetAttempts = { ...fieldAttempts };
+    delete resetAttempts['contactDetails.email'];
+    complaint = { ...complaint, contactDetails: { ...(complaint.contactDetails || {}), email } };
+    missingFields = (missingFields || []).filter((f: string) => f !== 'contactDetails.email');
+    console.log(`[updateComplaint] Captured email from free-text: ${email}, remaining missing: [${missingFields.join(', ')}]`);
+    // Note: we continue processing to allow capturing name or other fields in the same turn
+    // Return early only if there are no more missing fields to process this turn
+    if (missingFields.length === 0) {
       return {
-        complaint: updatedComplaint,
-        missingFields: updatedMissingFields,
+        complaint,
+        missingFields,
         fieldAttempts: resetAttempts,
       };
     }
+  }
+
+  const fieldToUpdate = missingFields[0];
+  if (!fieldToUpdate) {
+    return {};
   }
 
   // CRITICAL FIX: If user said they want to skip this field, don't extract - just remove it
@@ -2123,12 +2128,18 @@ export async function generateFinalResponse(state: GraphState): Promise<Partial<
       const value = (complaint.contactDetails as any)?.[field];
       return !value || value === 'unknown';
     });
-    
-    if (missingContactFields.length > 0) {
+
+    // If contact details are missing but we've already asked at least once, do not block final response
+    const fieldAttempts = (state as any).fieldAttempts || {};
+    const triedContact = contactFields.every(f => (fieldAttempts[`contactDetails.${f}`] || 0) > 0);
+
+    if (missingContactFields.length > 0 && !triedContact) {
       console.log(`[generateFinalResponse] User wants contact but missing fields: [${missingContactFields.join(', ')}]. Returning empty to trigger contact detail collection.`);
-      // Don't generate final message yet - the conversation should loop back to askQuestion
-      // This is a safety measure in case determineMissingFields didn't add contact fields
       return {};
+    }
+
+    if (missingContactFields.length > 0 && triedContact) {
+      console.log(`[generateFinalResponse] Contact missing after at least one ask; proceeding without re-asking. Missing: [${missingContactFields.join(', ')}]`);
     }
   }
 
