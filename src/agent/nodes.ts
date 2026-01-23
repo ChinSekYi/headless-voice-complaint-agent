@@ -610,86 +610,54 @@ export async function determineMissingFields(state: GraphState): Promise<Partial
     .map(([key, value]) => `${key}: ${value}`)
     .join(', ');
 
-  const determinePrompt = `You are a hospital complaint intake specialist. Analyze what information we have and determine what ADDITIONAL information would be genuinely useful for properly handling this complaint.
+  const determinePrompt = `You are a hospital complaint intake specialist. Determine the MINIMUM essential information needed to understand and handle this complaint. Prioritize: impact first, then context (date, location, service), then specific details. Max 3-4 fields.
 
 Complaint Type: ${complaint.subcategory} (${complaint.domain})
 User's Complaint Description: "${complaint.description}"
 Information Already Collected:
 ${knownFields || 'Only basic complaint classification'}
 
-**CONTEXT-AWARE FIELD SELECTION RULES:**
+**PROGRESSIVE QUESTIONING RULES (asks ONE field at a time, max 5 questions total):**
 
-For FACILITIES complaints (wayfinding, noise, cleanliness, comfort, equipment):
-- DO collect: event.location (area/ward), impact (how it affected them)
-- DO NOT collect: typeOfCare (not relevant for facility feedback), people.role
-- Example: "Toilet hard to find" → only ask for location, not department/service
+1. PRIORITY: Always ask IMPACT first if not known - "How did this affect you?"
+   - Impact is the most important detail for handling complaints
+   - Skip other fields if impact is unclear
 
-For WAIT_TIME complaints:
-- DO collect: event.date, typeOfCare (which service), impact if severe
-- DO NOT collect: people.role, billing
+2. CONTEXT FIELDS (ask only if truly essential):
+   - event.date: When did it happen? (SKIP if description already mentions timing)
+   - event.location: Where in hospital? (SKIP for non-location complaints)
+   - typeOfCare: Which service/department? (SKIP if already clear from description)
 
-For BILLING complaints - ANALYZE THE SPECIFIC ISSUE:
-- If about WRONG AMOUNT/OVERCHARGE → collect: event.date, typeOfCare, billing.amount, insuranceStatus
-- If about NAME/ADDRESS/ERROR on bill → collect: event.date, impact (only)
-- If about staff not checking/verifying → collect: people.role (who didn't check?), event.date, impact
-- DO NOT collect: fields not directly related to the specific billing issue
+3. SPECIFIC DETAILS (ask only if directly relevant):
+   - For BILLING → only ask about: billing.amount, insuranceStatus IF it's a charge issue
+   - For MEDICATION → only ask about: medication.name (skip if already described)
+   - For ATTITUDE/COMMUNICATION → only ask about: people.role (skip otherwise)
+   - DO NOT ask about departments for facility/location complaints
 
-**CRITICAL - What NOT to Ask (even if category seems to match):**
-- DON'T ask "Do you have insurance?" for billing complaints about WRONG NAME/WRONG DETAILS on bill
-- DON'T ask "How much was charged?" for billing complaints about staff not verifying/checking
-- DON'T ask "Which department?" for facility complaints about physical environment
-- DON'T ask "What service?" if user already described the location/area
-- DON'T repeat asking for details user has already provided in description
-- DON'T ask unrelated fields just because they're in the category checklist
+4. NEVER ask unrelated fields just because they're in the schema.
 
-For APPOINTMENT complaints:
-- DO collect: event.date
-- DO NOT collect: typeOfCare, people.role
+5. CONTACT DETAILS: Only ask contactDetails.wantsContact if complaint sounds addressable.
 
-For MEDICATION/CLINICAL complaints:
-- DO collect: event.date, medication.name, impact
-- DO NOT collect: typeOfCare unless truly relevant
+**Context-Specific Guidance:**
 
-For ATTITUDE/COMMUNICATION/PROFESSIONALISM complaints:
-- DO collect: people.role (staff involved), event.date
-- DO NOT collect: typeOfCare, billing, medication
+- FACILITIES (noise, cleanliness, temperature, comfort): Ask impact, location. DON'T ask typeOfCare.
+- WAIT_TIME (long waits): Ask impact, when, which service. Max 3 fields.
+- BILLING (wrong amount, error on bill): Ask impact FIRST. Then ask amount IF it's charge-related, NOT if it's admin error.
+- APPOINTMENT (cancelled, delayed): Ask impact, when. DON'T ask unrelated fields.
+- MEDICATION (wrong med, side effects): Ask impact, medication name. Max 2 fields.
+- ATTITUDE/COMMUNICATION (rude staff): Ask impact, who (role). Max 2 fields.
+- SAFETY: Ask impact (high priority), then specific details.
 
-For SAFETY complaints:
-- DO collect: event.date, impact (high priority), people.role if known
-- DO NOT collect: typeOfCare
+**JSON Array Output:**
+Return ONLY the fields ABSOLUTELY needed (typically 1-2). Examples:
+- User says "waited 3 hours, very frustrating": Return ["impact"] (date/service can be inferred later if needed)
+- User says "wrong med but doesn't know impact": Return ["impact", "medication.name"]
+- User says "staff rude, affected my recovery": Return [] (all key info is in description)
 
-**CONTACT DETAILS (REQUIRED FOR FOLLOW-UP)**: ALWAYS collect:
-- contactDetails.wantsContact FIRST - Do they want to be contacted? (required - true/false)
-- If wantsContact is TRUE or will be set to TRUE, MUST include: contactDetails.name, contactDetails.email
-- Only ask for name/email if wantsContact=true or will be asked
+Use these field names ONLY:
+["event.date", "event.location", "typeOfCare", "billing.amount", "billing.insuranceStatus", "medication.name", "people.role", "impact", "contactDetails.wantsContact", "contactDetails.name", "contactDetails.email"]
 
-**GENERAL RULES:**
-- Be SMART and CONTEXT-AWARE - analyze the SPECIFIC complaint, not just the category
-- Avoid asking for non-essential fields
-- If user has already explained the core issue in detail, DON'T ask for more of the same
-- If user hasn't mentioned IMPACT (how it affected them), prioritize asking about IMPACT
-- Examples:
-  * User says "bill name was wrong" → Ask: "How did this affect you?" | DON'T ask: "how much?" or "insurance?"
-  * User says "waited 5 hours" → Ask: "How did that affect you?" | DON'T ask: "do you have insurance?"
-  * User says "staff didn't check" → Ask: "How did this impact you?" | DON'T ask: unrelated fields
-- When in doubt: ask fewer questions, prioritize impact, then move to contact details
-
-
-Respond with JSON array of fields STILL NEEDED. Use these field names ONLY:
-[
-  "event.date",
-  "typeOfCare",
-  "billing.amount",
-  "billing.insuranceStatus",
-  "medication.name",
-  "people.role",
-  "impact",
-  "contactDetails.wantsContact",
-  "contactDetails.name",
-  "contactDetails.email",
-]
-
-Only include fields that are needed. Omit fields not mentioned.`;
+Output ONLY the JSON array, no explanation.`;
 
   try {
     const response = await llm.invoke(determinePrompt);
@@ -830,263 +798,132 @@ export async function askClarifyingQuestion(state: GraphState): Promise<Partial<
     return {};
   }
 
+  const fieldAttempts: Record<string, number> = state.fieldAttempts || {};
+  const totalQuestionsAsked = Object.values(fieldAttempts).reduce((sum, attempts) => sum + attempts, 0);
+  
+  // HARD LIMIT: Max 5 questions total
+  if (totalQuestionsAsked >= 5) {
+    console.log(`[askClarifyingQuestion] ⚠️ MAX QUESTIONS REACHED (5): Ending intake, moving to final response`);
+    return {
+      missingFields: [],
+      fieldAttempts: fieldAttempts,
+    };
+  }
+
+  // Separate situation fields from contact fields - always prioritize situation fields first
   const situationMissing = missingFields.filter((f: string) => !f.startsWith('contactDetails.'));
   const contactMissing = missingFields.filter((f: string) => f.startsWith('contactDetails.'));
 
-  // Prioritize a situation field (non-contact) for the next question when available
-  const fieldToAsk = (situationMissing.length > 0) ? situationMissing[0] : missingFields[0];
+  // Pick the first field to ask (in priority order)
+  const fieldToAsk = (situationMissing.length > 0) ? situationMissing[0] : contactMissing[0];
+  
   if (!fieldToAsk) {
+    console.log(`[askClarifyingQuestion] No fields to ask`);
     return {};
   }
 
-  // Reorder missingFields so the field we're asking is first (so skips remove the right one)
-  const orderedMissingFields = [fieldToAsk, ...missingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === missingFields.indexOf(fieldToAsk)) )];
-  
-  const fieldAttempts: Record<string, number> = state.fieldAttempts || {};
   const currentAttempts = fieldAttempts[fieldToAsk] || 0;
   
-  // SAFETY: If we've asked this exact field 3+ times, skip it permanently to prevent infinite loops
-  if (currentAttempts >= 3) {
-    console.log(`[askClarifyingQuestion] ⛔ SAFETY: Field "${fieldToAsk}" attempted ${currentAttempts} times, SKIPPING permanently`);
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = 999; // Mark as permanently skipped
-    const remainingFields = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
+  // Safety: Skip if already asked this field twice
+  if (currentAttempts >= 2) {
+    console.log(`[askClarifyingQuestion] Field "${fieldToAsk}" already attempted ${currentAttempts} times, skipping to next`);
+    const remainingFields = missingFields.filter((f: string) => f !== fieldToAsk);
     return {
       missingFields: remainingFields,
-      fieldAttempts: updatedAttempts,
+      fieldAttempts: fieldAttempts,
     };
   }
   
-  const remainingAfterThis = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
-  console.log(`[askClarifyingQuestion] Asking for field: "${fieldToAsk}" (attempt ${currentAttempts + 1}), remaining: [${remainingAfterThis.join(', ')}]`);
+  console.log(`[askClarifyingQuestion] Asking for field: "${fieldToAsk}" (question ${totalQuestionsAsked + 1}/5, attempt ${currentAttempts + 1})`);
   
-  // If we've already asked twice and they still can't answer, skip this field
-  if (currentAttempts >= 2) {
-    console.log(`[askClarifyingQuestion] Field "${fieldToAsk}" attempted ${currentAttempts} times, SKIPPING`);
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = 0;
-    const remainingFields = orderedMissingFields.filter((f: string, idx: number) => !(f === fieldToAsk && idx === orderedMissingFields.indexOf(fieldToAsk)));
-    return {
-      missingFields: remainingFields, // Remove this field and move on
-      fieldAttempts: updatedAttempts, // Reset counter
-    };
-  }
+  let question: string;
 
-  // Check if this is the first question (no attempts yet on any field) - use bundled empathetic approach
-  const isFirstQuestion = Object.keys(fieldAttempts).length === 0 || Object.values(fieldAttempts).every(v => v === 0);
-  
-  if (isFirstQuestion && situationMissing.length >= 1) {
-    // Bundle multiple related questions with empathy for better UX
-    const empathyMap: Record<string, string> = {
-      'ATTITUDE': "I'm sorry you experienced that.",
-      'COMMUNICATION': "I'm sorry you experienced that.",
-      'MEDICATION': "I'm sorry to hear about this medication concern.",
-      'WAIT_TIME': "I understand waiting can be frustrating.",
-      'BILLING': "I understand billing concerns can be stressful.",
-      'APPOINTMENT': "I'm sorry about the issue with your appointment.",
-      'CLINICAL': "I'm sorry to hear about your clinical concern.",
-      'FACILITY': "I'm sorry about the facility issue you experienced.",
-    };
-    
-    const empathyPrefix = getContextualEmpathyPrefix(complaint.subcategory);
-    
-    // Get contextual questions based on complaint category
-    const contextualQuestions = getContextualQuestions(complaint.subcategory, complaint);
-    const irrelevantFields = getIrrelevantFields(complaint.subcategory);
-    
-    // Filter contextual questions to only show relevant ones based on missing fields
-    // Map common contextual question patterns to fields they ask for
-    const questionFieldMap: Record<string, string[]> = {
-      'Which area': ['event.location'],
-      'When did': ['event.date'],
-      'How did this': ['impact'],
-      'Which medication': ['medication.name'],
-      'Who was': ['people.role'],
-      'What service': ['typeOfCare'],
-      'What was': ['impact', 'people.role'],
-      'Which department': ['typeOfCare'],
-    };
-    
-    // Filter to only show questions for fields that are actually in missingFields
-    const relevantContextualQuestions = contextualQuestions.filter((q: string) => {
-      // Check if any key in the question matches a field we're actually asking for
-      const isRelevant = Object.entries(questionFieldMap).some(([key, fields]) => {
-        if (q.includes(key)) {
-          return fields.some(f => orderedMissingFields.includes(f) || situationMissing.includes(f));
-        }
-        return false;
-      });
-      
-      // If it doesn't match the map, include it (be permissive for edge cases)
-      if (!isRelevant && Object.keys(questionFieldMap).every(key => !q.includes(key))) {
-        return true;
-      }
-      
-      return isRelevant;
-    });
-    
-    // Show up to 3 relevant questions
-    const bulletPoints = relevantContextualQuestions
-      .slice(0, 3)
-      .map((q: string) => `• ${q}`)
-      .join('\n');
-    
-    const question = `${empathyPrefix} To help us investigate and provide feedback, could you share:\n\n${bulletPoints}\n\nShare what you remember - approximate details are fine. If you don't know, just say "don't know" and we'll move on.`;
-    
-    const updatedMessages = [...state.messages, new AIMessage(question)];
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = currentAttempts + 1;
-    
-    return {
-      currentQuestion: question,
-      messages: updatedMessages,
-      fieldAttempts: updatedAttempts,
-      missingFields: orderedMissingFields,
-    };
+  // Generate field-specific question
+  if (fieldToAsk === "event.date") {
+    question = `When did this happen? (e.g., yesterday, last Tuesday, or a date like Jan 15) — approximate is fine.`;
+  } 
+  else if (fieldToAsk === "event.location") {
+    question = `Which area or part of the hospital was this in? (e.g., ward, waiting room, emergency dept) — if unsure, just your best guess.`;
   }
-
-  // OPTIMIZATION: For typeOfCare, provide dropdown-style options instead of open-ended question
-  if (fieldToAsk === "typeOfCare") {
-    const question = `To route your concern to the right department, could you tell me which service or department this was related to?\n\n${renderTypeOfCareOptionsText()}\n\nIf you don't know, just say "don't know" and we'll move on.`;
-    
-    const updatedMessages = [...state.messages, new AIMessage(question)];
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = currentAttempts + 1;
-    
-    return {
-      currentQuestion: question,
-      messages: updatedMessages,
-      fieldAttempts: updatedAttempts,
-      missingFields: orderedMissingFields,
-    };
+  else if (fieldToAsk === "typeOfCare") {
+    question = `Which service or department was this related to?\n\n${renderTypeOfCareOptionsText()}\n\nIf unsure, just tell me what you remember or say "don't know".`;
   }
-  
-  // NEW: For impact, ask conversational question with contextual concerns
-  if (fieldToAsk === "impact") {
-    let contextualConcerns = "like stress, delays in care, or affecting your daily activities";
-    
-    // Tailor concerns based on complaint type
+  else if (fieldToAsk === "impact") {
+    // Context-aware impact question
+    let contextualConcerns = "like stress, disruption, or affecting your daily activities";
     if (complaint.subcategory === 'WAIT_TIME') {
-      contextualConcerns = "like extra stress, time lost, or affecting your plans";
+      contextualConcerns = "like extra stress, wasted time, or affecting your plans";
     } else if (complaint.subcategory === 'BILLING') {
-      contextualConcerns = "like financial strain, stress, or affecting your other medical care";
+      contextualConcerns = "like financial strain, stress, or affecting your medical care";
     } else if (complaint.subcategory === 'MEDICATION') {
-      contextualConcerns = "like health impacts, side effects, or worry about your treatment";
+      contextualConcerns = "like health impacts or worry about your treatment";
     } else if (complaint.subcategory === 'FACILITIES') {
       contextualConcerns = "like discomfort, sleep disruption, or affecting your recovery";
+    } else if (complaint.subcategory === 'APPOINTMENT') {
+      contextualConcerns = "like scheduling conflicts or missed care";
     }
-    
-    const question = `How did this affect you? (for example, ${contextualConcerns})`;
-    const updatedMessages = [...state.messages, new AIMessage(question)];
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = currentAttempts + 1;
-    
-    return {
-      currentQuestion: question,
-      messages: updatedMessages,
-      fieldAttempts: updatedAttempts,
-      missingFields: orderedMissingFields,
-    };
+    question = `How did this affect you? (for example, ${contextualConcerns}) — whatever comes to mind is helpful.`;
   }
-  
-  // Handle contact detail fields - first ask if they want to be contacted (opt-in flow)
-  const contactFields = ['contactDetails.name', 'contactDetails.email', 'contactDetails.wantsContact'];
-  if (contactFields.includes(fieldToAsk)) {
-    // If asking for wantsContact, do it FIRST before any other contact details
-    if (fieldToAsk === 'contactDetails.wantsContact') {
-      const question = `Thank you for sharing this information. Would you like us to contact you regarding this complaint? (Yes/No)`;
-      
-      const updatedMessages = [...state.messages, new AIMessage(question)];
-      const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-      updatedAttempts[fieldToAsk] = currentAttempts + 1;
-      
-      return {
-        currentQuestion: question,
-        messages: updatedMessages,
-        fieldAttempts: updatedAttempts,
-        missingFields: orderedMissingFields,
-      };
-    }
-    
-    // Only ask for other contact details if user wants to be contacted
-    const wantsContact = (complaint.contactDetails?.wantsContact as any) === true || (complaint.contactDetails?.wantsContact as any) === 'true';
-    if (!wantsContact && fieldToAsk !== 'contactDetails.wantsContact') {
-      // User doesn't want contact - end conversation (no additional questions)
-      return {};
-    }
-    
-    // If asking for other contact details, ask them one by one or bundled
-    const missingContactFields = missingFields.filter((f: string) => contactFields.includes(f));
-    
-    if (missingContactFields.length >= 2) {
-      // Ask for main contact details (skip wantsContact as we already have it)
-      const question = `Thank you. To help us follow up with you, could you please share your name and email address?`;
-      
-      const updatedMessages = [...state.messages, new AIMessage(question)];
-      const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-      // Mark both name and email as attempted so we don't re-ask the bundle
-      updatedAttempts['contactDetails.name'] = (updatedAttempts['contactDetails.name'] || 0) + 1;
-      updatedAttempts['contactDetails.email'] = (updatedAttempts['contactDetails.email'] || 0) + 1;
-      
-      return {
-        currentQuestion: question,
-        messages: updatedMessages,
-        fieldAttempts: updatedAttempts,
-        missingFields: orderedMissingFields,
-      };
-    }
+  else if (fieldToAsk === "billing.amount") {
+    question = `What was the amount on the bill, or roughly how much? (approximate is completely fine — even "around £100" helps)`;
   }
-  
-  // Handle wantsContact yes/no question
-  if (fieldToAsk === "contactDetails.wantsContact") {
-    const question = `Thank you for sharing this information. Would you like us to contact you regarding this complaint? (Yes/No)`;
-    const updatedMessages = [...state.messages, new AIMessage(question)];
-    const updatedAttempts: Record<string, number> = { ...fieldAttempts };
-    updatedAttempts[fieldToAsk] = currentAttempts + 1;
-    
-    return {
-      currentQuestion: question,
-      messages: updatedMessages,
-      fieldAttempts: updatedAttempts,
-      missingFields: orderedMissingFields,
-    };
+  else if (fieldToAsk === "billing.insuranceStatus") {
+    question = `Do you have insurance that should have covered this? (yes/no/don't know) — totally fine if you're not sure.`;
   }
-  
-  // For other fields, use empathetic single-field question
-  const questionPrompt = `You are an empathetic hospital intake specialist. Generate a brief, caring question to collect this information.
-
+  else if (fieldToAsk === "medication.name") {
+    question = `What was the medication? (brand name or generic — if you don't remember exactly, describe it or say "don't know")`;
+  }
+  else if (fieldToAsk === "people.role") {
+    question = `Who was involved? (e.g., nurse, doctor, receptionist, admin staff) — or just describe them if you don't know their exact role.`;
+  }
+  else if (fieldToAsk === "contactDetails.wantsContact") {
+    question = `Thank you for sharing this. Would you like us to follow up with you about this complaint? (Yes/No)`;
+  }
+  else if (fieldToAsk === "contactDetails.name") {
+    question = `To follow up, could you share your name?`;
+  }
+  else if (fieldToAsk === "contactDetails.email") {
+    question = `And your email address?`;
+  }
+  else {
+    // Fallback: use LLM to generate a natural question for unknown fields
+    const questionPrompt = `Generate a SHORT, empathetic question to collect this information from a hospital patient.
 Complaint Type: ${complaint.subcategory}
-Patient's Complaint: ${complaint.description}
+Patient's Complaint: "${complaint.description}"
 Field needed: ${fieldToAsk}
 
-Generate a SHORT question (10-15 words). Make it empathetic and natural:
-- Start with brief empathy when appropriate: "I'm sorry about that."
-- Then ask clearly: "Could you share [the specific detail]?"
-- Be conversational and human
+Guidelines:
+- Be brief (1 sentence, 15-20 words max)
+- Be conversational and warm
+- Explicitly allow "don't know" or approximate answers
+- Example: "When did this happen? Approximate is fine, or just say 'don't know'."
 
-Examples:
-- "I understand. When did this happen?"
-- "Could you tell me which medication this was?"
-- "Who did you speak with about this?"
-- "What was the amount on the bill?"
-- "Which department or service was this in?"
+Output ONLY the question, no explanation.`;
 
-Generate ONLY the question, nothing else.`;
+    const response = await llm.invoke(questionPrompt);
+    question = response.content.toString().trim();
+  }
 
-  const response = await llm.invoke(questionPrompt);
-  const question = `${response.content.toString().trim()} If you don't know, just say "don't know" and we'll move on.`;
+  // Ensure question explicitly allows "don't know" if it doesn't already
+  if (!question.toLowerCase().includes("don't know")) {
+    question += ` If you don't know, just say so and we'll move on.`;
+  }
 
   // Add assistant message to history
   const updatedMessages = [...state.messages, new AIMessage(question)];
 
+  // Update field attempts
   const updatedAttempts: Record<string, number> = { ...fieldAttempts };
   updatedAttempts[fieldToAsk] = currentAttempts + 1;
-  
+
+  // Remove this field from missingFields so we ask it next time if needed
+  const remainingMissing = missingFields.filter((f: string) => f !== fieldToAsk);
+
   return {
     currentQuestion: question,
     messages: updatedMessages,
     fieldAttempts: updatedAttempts,
-    missingFields: orderedMissingFields,
+    missingFields: remainingMissing,
   };
 }
 

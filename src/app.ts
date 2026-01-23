@@ -7,6 +7,7 @@ import { HumanMessage, BaseMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
 import { saveComplaintRecord } from "./storage.js";
 import { transcribeAudio, synthesizeSpeech } from "./voiceService.js";
+import { recordMetric, calculateLatencies, hasValidOutcome, initMetrics } from "./metrics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +47,8 @@ app.post("/voice", async (req, res) => {
     const t0 = Date.now();
     let { text, sessionId: providedSessionId, audioBase64 } = req.body;
     let transcription: string | null = null;
+    let sttMs = 0;
+    let ttsMs = 0;
 
     // Simple sanitizer to strip emojis and non-text markers that confuse intent parsing
     const sanitizeUserText = (raw: string | null | undefined): string => {
@@ -60,10 +63,12 @@ app.post("/voice", async (req, res) => {
     // If audio is provided, transcribe it first
     if (audioBase64 && !text) {
       try {
+        const sttStart = Date.now();
         const audioBuffer = Buffer.from(audioBase64, 'base64');
         transcription = await transcribeAudio(audioBuffer);
+        sttMs = Date.now() - sttStart;
         text = sanitizeUserText(transcription);
-        console.log(`[STT] Transcribed: "${text}"`);
+        console.log(`[STT] Transcribed: "${text}" (${sttMs}ms)`);
       } catch (error) {
         console.error("[STT] Transcription failed:", error);
         return res.status(400).json({ 
@@ -102,25 +107,52 @@ app.post("/voice", async (req, res) => {
       };
       
       // Run main graph (validate → classify → determineMissing → ask/final)
+      const llmStart = Date.now();
       const result = await graph.invoke(state) as GraphState;
+      const llmMs = Date.now() - llmStart;
+      
       sessions.set(sessionId, result);
       
-      const totalMs = Date.now() - t0;
       const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
       const lastMessage = lastAI || result.messages[result.messages.length - 1];
       const textResponse = lastMessage?.content?.toString() || 'No response';
       
-      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
-      
       // Generate audio response
       let audioBase64 = null;
       try {
+        const ttsStart = Date.now();
         audioBase64 = await synthesizeSpeech(textResponse);
-        console.log(`[TTS] Synthesized ${audioBase64.length} bytes`);
+        ttsMs = Date.now() - ttsStart;
+        console.log(`[TTS] Synthesized ${audioBase64.length} bytes (${ttsMs}ms)`);
       } catch (error) {
         console.error("[TTS] Synthesis failed:", error);
         // Continue without audio
       }
+      
+      const totalMs = Date.now() - t0;
+      const userProvidedInfo = text.length > 10; // heuristic
+      const hasOutcome = hasValidOutcome(result.isComplete, result.missingFields.length, userProvidedInfo);
+      
+      // Record metrics asynchronously (don't block response)
+      recordMetric({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        isComplete: result.isComplete,
+        hadValidOutcome: hasOutcome,
+        complaintType: (result.complaint.subcategory as any),
+        totalLatencyMs: totalMs,
+        sttLatencyMs: sttMs > 0 ? sttMs : undefined,
+        llmLatencyMs: llmMs,
+        ttsLatencyMs: ttsMs > 0 ? ttsMs : undefined,
+        totalUtterances: result.messages.length,
+        userUtterances: result.messages.filter((m) => m._getType?.() === 'human' || m.constructor.name === 'HumanMessage').length,
+        botUtterances: result.messages.filter((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage').length,
+        missingFieldsAtEnd: result.missingFields.length,
+        questionsAsked: Object.keys(state.fieldAttempts || {}).length,
+        description: result.complaint.description || undefined,
+      }).catch(err => console.warn("Metric recording failed:", err));
+      
+      console.log(`[metrics] sessionId=${sessionId} latency=${totalMs}ms (STT:${sttMs}ms LLM:${llmMs}ms TTS:${ttsMs}ms) utterances=${result.messages.length} outcome=${hasOutcome}`);
       
       return res.json({
         sessionId,
@@ -129,7 +161,7 @@ app.post("/voice", async (req, res) => {
         isComplete: result.isComplete,
         needsMoreInfo: result.needsMoreInfo,
         audioBase64,
-        metrics: { totalMs },
+        metrics: calculateLatencies(totalMs, sttMs, ttsMs, llmMs),
         complaint: result.complaint,
         missingFields: result.missingFields,
         transcription,
@@ -141,21 +173,36 @@ app.post("/voice", async (req, res) => {
       console.log(`[DEBUG] Before continuation - subcategory: ${state.complaint.subcategory}, needsMoreInfo: ${state.needsMoreInfo}, missingFields: ${state.missingFields.length}`);
       
       // Run continuation graph (update → determineMissing → ask/final)
+      const llmStart = Date.now();
       const result = await continuationGraph.invoke(state, { 
         recursionLimit: 10,
       }) as GraphState;
+      const llmMs = Date.now() - llmStart;
       
       console.log(`[DEBUG] After continuation - subcategory: ${result.complaint.subcategory}, needsMoreInfo: ${result.needsMoreInfo}, missingFields: ${result.missingFields.length}, messageCount: ${result.messages.length}`);
       console.log(`[DEBUG] Last message: ${result.messages[result.messages.length - 1]?.content?.toString().substring(0, 50)}`);
       
       sessions.set(sessionId, result);
       
-      const totalMs = Date.now() - t0;
       const lastAI = [...result.messages].reverse().find((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage');
       const lastMessage = lastAI || result.messages[result.messages.length - 1];
       const textResponse = lastMessage?.content?.toString() || 'No response';
       
-      console.log(`[metrics] sessionId=${sessionId} totalMs=${totalMs} isComplete=${result.isComplete} needsMoreInfo=${result.needsMoreInfo} missingFields=${result.missingFields.length}`);
+      // Generate audio response
+      let audioBase64 = null;
+      try {
+        const ttsStart = Date.now();
+        audioBase64 = await synthesizeSpeech(textResponse);
+        ttsMs = Date.now() - ttsStart;
+        console.log(`[TTS] Synthesized ${audioBase64.length} bytes (${ttsMs}ms)`);
+      } catch (error) {
+        console.error("[TTS] Synthesis failed:", error);
+        // Continue without audio
+      }
+      
+      const totalMs = Date.now() - t0;
+      const userProvidedInfo = state.messages.filter((m) => m._getType?.() === 'human' || m.constructor.name === 'HumanMessage').length > 0;
+      const hasOutcome = hasValidOutcome(result.isComplete, result.missingFields.length, userProvidedInfo);
       
       // Persist completed complaint and clean up session
       if (result.isComplete) {
@@ -172,15 +219,26 @@ app.post("/voice", async (req, res) => {
         sessions.delete(sessionId);
       }
       
-      // Generate audio response
-      let audioBase64 = null;
-      try {
-        audioBase64 = await synthesizeSpeech(textResponse);
-        console.log(`[TTS] Synthesized ${audioBase64.length} bytes`);
-      } catch (error) {
-        console.error("[TTS] Synthesis failed:", error);
-        // Continue without audio
-      }
+      // Record metrics asynchronously
+      recordMetric({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        isComplete: result.isComplete,
+        hadValidOutcome: hasOutcome,
+        complaintType: (result.complaint.subcategory as any),
+        totalLatencyMs: totalMs,
+        sttLatencyMs: sttMs > 0 ? sttMs : undefined,
+        llmLatencyMs: llmMs,
+        ttsLatencyMs: ttsMs > 0 ? ttsMs : undefined,
+        totalUtterances: result.messages.length,
+        userUtterances: result.messages.filter((m) => m._getType?.() === 'human' || m.constructor.name === 'HumanMessage').length,
+        botUtterances: result.messages.filter((m) => m._getType?.() === 'ai' || m.constructor.name === 'AIMessage').length,
+        missingFieldsAtEnd: result.missingFields.length,
+        questionsAsked: Object.keys(result.fieldAttempts || {}).length,
+        description: result.complaint.description || undefined,
+      }).catch(err => console.warn("Metric recording failed:", err));
+      
+      console.log(`[metrics] sessionId=${sessionId} latency=${totalMs}ms (LLM:${llmMs}ms TTS:${ttsMs}ms) utterances=${result.messages.length} complete=${result.isComplete} outcome=${hasOutcome}`);
       
       return res.json({
         sessionId,
@@ -189,7 +247,7 @@ app.post("/voice", async (req, res) => {
         isComplete: result.isComplete,
         needsMoreInfo: result.needsMoreInfo,
         audioBase64,
-        metrics: { totalMs },
+        metrics: calculateLatencies(totalMs, sttMs, ttsMs, llmMs),
         complaint: result.complaint,
         missingFields: result.missingFields,
         transcription,
@@ -261,4 +319,27 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
+// Metrics endpoint - returns aggregated Voice AI performance metrics
+app.get("/metrics", async (_req, res) => {
+  try {
+    const { getMetricsSnapshot } = await import("./metrics.js");
+    const snapshot = await getMetricsSnapshot();
+    
+    return res.json({
+      timestamp: new Date().toISOString(),
+      ...snapshot,
+      description: {
+        validOutcomeRate: "Percentage of conversations with valid outcome (complete or sufficient info collected)",
+        avgLatencyMs: "Average end-to-end latency in milliseconds (speech→text→LLM→response→voice)",
+        avgUtterancesPerTask: "Average number of turns (user + bot messages) per conversation",
+        completionRate: "Percentage of explicitly completed conversations",
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching metrics:", error);
+    res.status(500).json({ error: "Failed to fetch metrics", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 export default app;
+
