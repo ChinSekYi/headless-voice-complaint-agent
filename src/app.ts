@@ -1,10 +1,14 @@
 import express from "express";
 import "dotenv/config";
+import path from "path";
+import { fileURLToPath } from "url";
 import { createComplaintGraph, createContinuationGraph, type GraphState } from "./agent/index.js";
 import { HumanMessage, BaseMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
 import { saveComplaintRecord } from "./storage.js";
 import { transcribeAudio, synthesizeSpeech } from "./voiceService.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -13,7 +17,8 @@ app.use(express.static("public"));
 
 // Explicitly serve root index.html to fix Vercel routing
 app.get("/", (_req, res) => {
-  res.sendFile("./public/index.html", { root: process.cwd() });
+  const indexPath = path.resolve(__dirname, "../public/index.html");
+  res.sendFile(indexPath);
 });
 
 // In-memory session store for multi-turn conversations
