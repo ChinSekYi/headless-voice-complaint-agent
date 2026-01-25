@@ -4,6 +4,10 @@ End-to-end demo for handling hospital complaints via text or voice. Minimal HTML
 
 ---
 
+### 📺 Demo
+<p align="center">
+  <video src="demo_video.mp4" width="100%" controls muted></video>
+</p>
 ### Tech Stack
 - Node.js + TypeScript
 - Express (HTTP server)
