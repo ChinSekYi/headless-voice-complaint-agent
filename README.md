@@ -6,7 +6,7 @@ About: End-to-end demo for handling hospital complaints via text or voice. Minim
 Hospital complaint intake is often unstructured and repetitive. This demo uses an AI agent to turn a patient complaint into a structured handoff with minimal follow-up, while staying bounded and safe.
 
 
-### 📺 Demo
+### Demo
 <p align="center">
   <video src="https://github.com/user-attachments/assets/7a2108d7-eebf-4be1-9e34-8c7ba89c43e8" width="100%" controls muted></video>
 </p>
