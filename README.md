@@ -1,13 +1,26 @@
 ## Headless Voice Complaint Agent
 
-End-to-end demo for handling hospital complaints via text or voice. Minimal HTML frontend, Express backend, Azure for LLM + Speech. Deployed on Vercel.
+About: End-to-end demo for handling hospital complaints via text or voice. Minimal HTML frontend, Express backend, Azure for LLM + Speech. Deployed on Vercel.
 
----
+### Problem Statement
+Hospital complaint intake is often unstructured and repetitive. This demo uses an AI agent to turn a patient complaint into a structured handoff with minimal follow-up, while staying bounded and safe.
+
 
 ### 📺 Demo
 <p align="center">
   <video src="https://github.com/user-attachments/assets/7a2108d7-eebf-4be1-9e34-8c7ba89c43e8" width="100%" controls muted></video>
 </p>
+
+### Stakeholders
+- Patients
+- Triage / complaint handling staff
+- Hospital operations
+- Product / AI team
+
+### Expected Impact
+- Less manual rework
+- Faster first response
+- Better complaint completeness
 
 ### Tech Stack
 - Node.js + TypeScript
