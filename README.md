@@ -29,6 +29,9 @@ Hospital complaint intake is often unstructured and repetitive. This demo uses a
 - Azure Speech Services (STT/TTS)
 - Plain HTML + JS (served from `public/`)
 
+### System Diagram
+<img width="2000" height="1559" alt="flow" src="https://github.com/user-attachments/assets/71300af6-6a72-4fab-a9bf-34f0975a5dd3" />
+
 ---
 
 ### Project Structure
