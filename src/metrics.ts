@@ -1,3 +1,13 @@
+/*
+What to extract:
+
+Every request records a metric row to data/metrics.ndjson.
+Tracks completion, valid outcome, latency components, utterance counts, missing fields.
+hasValidOutcome allows useful-but-not-fully-complete outcomes.
+calculateLatencies returns breakdown (STT/LLM/TTS/other).
+
+“Metrics are written every turn, so we can monitor operational quality even when a session doesn’t fully complete.”
+*/
 import { promises as fs } from "fs";
 import path from "path";
 

@@ -1,3 +1,13 @@
+/*
+What to extract:
+
+Completed complaint is appended to data/complaints.ndjson.
+Stored record includes sessionId, submissionTime, full complaint fields, transcript.
+Persistence happens only when conversation is complete.
+
+- We use append-only NDJSON for durable demo logging, only writing complaint records at completion.
+
+*/
 import { promises as fs } from "fs";
 import path from "path";
 import type { Complaint } from "./config/complaintSchema.js";

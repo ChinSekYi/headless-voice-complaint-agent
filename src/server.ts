@@ -1,3 +1,12 @@
+/*
+Server starts Express app.
+On startup it initializes complaint storage and metrics storage.
+It warns if Azure env vars are missing.
+Interview line:
+
+On boot, we bring up HTTP, initialize storage files, and validate required cloud config.
+*/
+
 import app from "./app.js";
 import { initStorage } from "./storage.js";
 import { initMetrics } from "./metrics.js";

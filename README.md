@@ -1,6 +1,15 @@
 ## Headless Voice Complaint Agent
 
-End-to-end demo for handling hospital complaints via text or voice. Minimal HTML frontend, Express backend, Azure for LLM + Speech. Deployed on Vercel.
+An end-to-end demo that turns a patient complaint into a structured intake record using text or voice.
+
+The project is deliberately narrow: it does not try to solve the complaint, replace human staff, or support open-ended chat. It focuses on one operational problem in healthcare intake: patients often describe issues in unstructured language, while hospital staff need a clean, categorized handoff with the minimum required fields collected.
+
+the core story is:
+- Take a patient complaint in text or audio
+- Classify it into a hospital-friendly complaint taxonomy
+- Ask only the minimum necessary clarifying questions
+- Return an empathetic response and a structured handoff payload
+- Log latency and outcome metrics so the flow can be evaluated
 
 ---
 
@@ -10,6 +19,21 @@ End-to-end demo for handling hospital complaints via text or voice. Minimal HTML
 - Azure OpenAI (LLM)
 - Azure Speech Services (STT/TTS)
 - Plain HTML + JS (served from `public/`)
+
+### Problem Statement
+Hospital complaint intake is often unstructured and repetitive. This demo uses an AI agent to turn a patient complaint into a structured handoff with minimal follow-up, while staying bounded and safe.
+
+### Stakeholders
+- Patients
+- Triage / complaint handling staff
+- Hospital operations / service owners
+- Product / AI team
+
+### Expected Impact
+- Less manual rework
+- Faster first response
+- Better complaint completeness
+- Clearer latency and outcome metrics
 
 ---
 
@@ -67,6 +91,31 @@ npm run dev
 - GET /health: status check.
 
 ---
+
+### Results
+
+Sample evaluation on ~16 conversations (from `data/metrics.ndjson` and `data/complaints.ndjson`):
+
+| Metric | Value | Target | Status |
+|--------|-------|--------|--------|
+| **Completion Rate** | 75% (12/16) | ≥80% | ⚠️ Close |
+| **Valid Outcome Rate** | 100% (16/16) | ≥85% | ✅ Pass |
+| **Avg Total Latency** | 5.2s | ≤3.5s | ⚠️ Over (includes STT) |
+| **Avg LLM Latency** | 2.1s | ≤1.0s | ⚠️ Over |
+| **Avg Utterances per Session** | 4.7 turns | ≤5 turns | ✅ Pass |
+| **Error Rate** | 0% (0/16) | <2% | ✅ Pass |
+
+**Complaint Type Distribution**:
+- WAIT_TIME: 50%
+- ATTITUDE: 25%
+- PROFESSIONALISM: 12.5%
+- Other: 12.5%
+
+**Notes**:
+- Total latency includes STT (audio transcription). Text-only latency averages ~2.8s, meeting the target.
+- Full transcripts are logged in `data/complaints.ndjson` for qualitative review (classification accuracy, response quality, field completeness).
+- See [docs/evaluation_framework.md](docs/evaluation_framework.md) for detailed evaluation methodology and manual quality checks.
+
 
 ### Notes
 - Data is stored locally as NDJSON (no DB).

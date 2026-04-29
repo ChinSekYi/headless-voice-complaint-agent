@@ -42,6 +42,16 @@ function buildTranscript(messages: BaseMessage[]): { role: string; content: stri
   });
 }
 
+/*
+What to extract:
+
+Input can be text or audioBase64.
+Audio path first does STT, then sanitizes text.
+Session id is created or reused.
+Session state is kept in an in-memory map.
+
+Everything funnels through /voice, which normalizes text/audio into one stateful flow
+*/
 app.post("/voice", async (req, res) => {
   try {
     const t0 = Date.now();
@@ -84,6 +94,21 @@ app.post("/voice", async (req, res) => {
 
     // Sanitize raw text input as well
     text = sanitizeUserText(text);
+
+    /*
+    New session branch:
+    Creates initial graph state (messages, empty complaint, missingFields, flags).
+    Invokes initial graph.
+    Returns AI response + optional TTS + metrics payload.
+    Stores updated state in memory for next turn.
+    Existing session branch:
+
+    Appends user message.
+    Invokes continuation graph.
+    If complete: persists complaint record and deletes session.
+    Always records per-turn metrics.
+    */
+
 
     // Get or create session
     let sessionId = providedSessionId;
